@@ -1,16 +1,18 @@
 //! Command-line interface for arkai.
 //!
 //! Provides commands for running pipelines, checking status,
-//! listing runs, and resuming failed runs.
+//! listing runs, resuming failed runs, and managing the content library.
 
 use std::io::{self, Read};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use uuid::Uuid;
 
+use crate::adapters::{ACTION_WEB, ACTION_YOUTUBE};
 use crate::core::{Orchestrator, Pipeline};
+use crate::library::{Catalog, CatalogItem, ContentType, LibraryContent};
 
 /// arkai - Event-sourced AI pipeline orchestrator
 #[derive(Parser, Debug)]
@@ -62,6 +64,76 @@ pub enum Commands {
         #[arg(short, long, default_value = ":9000")]
         address: String,
     },
+
+    /// Ingest content from a URL (YouTube or web)
+    Ingest {
+        /// URL to ingest
+        url: String,
+
+        /// Content type (auto-detected if not specified)
+        #[arg(short, long, value_enum)]
+        content_type: Option<IngestType>,
+
+        /// Tags to apply (comma-separated)
+        #[arg(short, long)]
+        tags: Option<String>,
+
+        /// Custom title (extracted from content if not specified)
+        #[arg(long)]
+        title: Option<String>,
+    },
+
+    /// List items in the library
+    Library {
+        /// Filter by content type
+        #[arg(short, long, value_enum)]
+        content_type: Option<IngestType>,
+
+        /// Maximum number of items to show
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
+    },
+
+    /// Search the library
+    Search {
+        /// Search query
+        query: String,
+    },
+
+    /// Show details of a library item
+    Show {
+        /// Content ID
+        content_id: String,
+
+        /// Show full artifact content
+        #[arg(short, long)]
+        full: bool,
+    },
+
+    /// Reprocess a library item
+    Reprocess {
+        /// Content ID to reprocess
+        content_id: String,
+    },
+}
+
+/// Content type for CLI (maps to ContentType)
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum IngestType {
+    /// YouTube video
+    Youtube,
+
+    /// Web page/article
+    Web,
+}
+
+impl From<IngestType> for ContentType {
+    fn from(t: IngestType) -> Self {
+        match t {
+            IngestType::Youtube => ContentType::YouTube,
+            IngestType::Web => ContentType::Web,
+        }
+    }
 }
 
 impl Cli {
@@ -86,6 +158,26 @@ impl Cli {
             }
             Commands::Serve { address } => {
                 serve(&address).await
+            }
+            Commands::Ingest {
+                url,
+                content_type,
+                tags,
+                title,
+            } => {
+                ingest_content(&url, content_type, tags, title).await
+            }
+            Commands::Library { content_type, limit } => {
+                list_library(content_type, limit).await
+            }
+            Commands::Search { query } => {
+                search_library(&query).await
+            }
+            Commands::Show { content_id, full } => {
+                show_content(&content_id, full).await
+            }
+            Commands::Reprocess { content_id } => {
+                reprocess_content(&content_id).await
             }
         }
     }
@@ -286,4 +378,300 @@ mod atty {
         // This is a simplified version - in production, use the atty crate
         true
     }
+}
+
+/// Detect content type from URL
+fn detect_content_type(url: &str) -> ContentType {
+    let url_lower = url.to_lowercase();
+    if url_lower.contains("youtube.com") || url_lower.contains("youtu.be") {
+        ContentType::YouTube
+    } else {
+        ContentType::Web
+    }
+}
+
+/// Extract title from content (first non-empty line or fallback to URL)
+fn extract_title(content: &str, url: &str) -> String {
+    // Try to extract title from first line (often contains title in transcripts)
+    content
+        .lines()
+        .find(|line| !line.trim().is_empty() && line.len() < 200)
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| {
+            // Fallback: extract from URL
+            url.split('/')
+                .last()
+                .unwrap_or("Untitled")
+                .split('?')
+                .next()
+                .unwrap_or("Untitled")
+                .to_string()
+        })
+}
+
+/// Create a dynamic ingestion pipeline
+fn create_ingest_pipeline(content_type: ContentType) -> Pipeline {
+    use crate::core::pipeline::{AdapterType, InputSource, PipelineInputMarker, RetryPolicy, Step};
+    use crate::core::safety::SafetyLimits;
+
+    let (name, fetch_action) = match content_type {
+        ContentType::YouTube => ("youtube-wisdom", ACTION_YOUTUBE),
+        ContentType::Web => ("web-wisdom", ACTION_WEB),
+        ContentType::Other => ("content-wisdom", ACTION_WEB),
+    };
+
+    Pipeline {
+        name: name.to_string(),
+        description: format!("{} content ingestion pipeline", name),
+        safety_limits: SafetyLimits {
+            step_timeout_seconds: 120, // 2 minutes for fetching
+            ..Default::default()
+        },
+        steps: vec![
+            Step {
+                name: "fetch".to_string(),
+                adapter: AdapterType::Fabric,
+                action: fetch_action.to_string(),
+                input_from: InputSource::PipelineInput(PipelineInputMarker::PipelineInput),
+                retry_policy: RetryPolicy::default(),
+                timeout_seconds: Some(120),
+            },
+            Step {
+                name: "wisdom".to_string(),
+                adapter: AdapterType::Fabric,
+                action: "extract_wisdom".to_string(),
+                input_from: InputSource::PreviousStep {
+                    previous_step: "fetch".to_string(),
+                },
+                retry_policy: RetryPolicy::default(),
+                timeout_seconds: Some(180),
+            },
+            Step {
+                name: "summary".to_string(),
+                adapter: AdapterType::Fabric,
+                action: "summarize".to_string(),
+                input_from: InputSource::PreviousStep {
+                    previous_step: "wisdom".to_string(),
+                },
+                retry_policy: RetryPolicy::default(),
+                timeout_seconds: Some(120),
+            },
+        ],
+    }
+}
+
+/// Ingest content from a URL
+async fn ingest_content(
+    url: &str,
+    content_type: Option<IngestType>,
+    tags: Option<String>,
+    title: Option<String>,
+) -> Result<()> {
+    // Detect or use specified content type
+    let ct = content_type
+        .map(ContentType::from)
+        .unwrap_or_else(|| detect_content_type(url));
+
+    eprintln!("📥 Ingesting {} content from: {}", ct, url);
+
+    // Create dynamic pipeline for ingestion
+    let pipeline = create_ingest_pipeline(ct);
+
+    // Run the pipeline with URL as input
+    let orchestrator = Orchestrator::new();
+    let run = orchestrator.run_pipeline(&pipeline, url.to_string()).await?;
+
+    match &run.state {
+        crate::domain::RunState::Completed => {
+            // Get the fetch output for title extraction if not provided
+            let final_title = title.unwrap_or_else(|| {
+                run.artifacts
+                    .get("fetch")
+                    .map(|a| extract_title(&a.content, url))
+                    .unwrap_or_else(|| extract_title("", url))
+            });
+
+            // Create library content
+            let content = LibraryContent::new(url, &final_title, ct);
+
+            // Copy artifacts from run to library
+            let artifacts = content.copy_from_run(run.id).await?;
+            content.save_metadata().await?;
+
+            // Update catalog
+            let mut catalog = Catalog::load().await?;
+            let mut item = CatalogItem::new(url, &final_title, ct)
+                .with_run_id(run.id.to_string());
+
+            // Add tags
+            if let Some(tags_str) = tags {
+                let tag_list: Vec<String> = tags_str
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                item = item.with_tags(tag_list);
+            }
+
+            // Add artifacts
+            for artifact in &artifacts {
+                item = item.with_artifact(artifact.clone());
+            }
+
+            catalog.add(item);
+            catalog.save().await?;
+
+            eprintln!("\n✅ Content ingested successfully!");
+            eprintln!("   ID: {}", content.id);
+            eprintln!("   Title: {}", final_title);
+            eprintln!("   Artifacts: {:?}", artifacts);
+            eprintln!("   Run: {}", run.id);
+
+            // Print the wisdom output
+            if let Some(wisdom) = run.artifacts.get("wisdom") {
+                println!("\n{}", wisdom.content);
+            }
+        }
+        crate::domain::RunState::Failed { error } => {
+            eprintln!("\n❌ Ingestion failed: {}", error);
+            eprintln!("   Run: {}", run.id);
+            std::process::exit(1);
+        }
+        _ => {
+            eprintln!("\n⚠️ Ingestion ended in unexpected state: {:?}", run.state);
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
+
+/// List items in the library
+async fn list_library(content_type: Option<IngestType>, limit: usize) -> Result<()> {
+    let catalog = Catalog::load().await?;
+
+    if catalog.is_empty() {
+        println!("Library is empty. Use 'arkai ingest <url>' to add content.");
+        return Ok(());
+    }
+
+    let items: Vec<&CatalogItem> = if let Some(ct) = content_type {
+        catalog.filter_by_type(ct.into())
+    } else {
+        catalog.list(Some(limit))
+    };
+
+    println!("{:<18} {:<10} {:<50}", "ID", "TYPE", "TITLE");
+    println!("{}", "-".repeat(80));
+
+    for item in items.iter().take(limit) {
+        let title_truncated = if item.title.len() > 47 {
+            format!("{}...", &item.title[..47])
+        } else {
+            item.title.clone()
+        };
+        println!(
+            "{:<18} {:<10} {:<50}",
+            item.id.as_str(),
+            item.content_type.to_string(),
+            title_truncated
+        );
+    }
+
+    println!("\nTotal: {} items", catalog.len());
+
+    Ok(())
+}
+
+/// Search the library
+async fn search_library(query: &str) -> Result<()> {
+    let catalog = Catalog::load().await?;
+
+    let results = catalog.search(query);
+
+    if results.is_empty() {
+        println!("No results found for: {}", query);
+        return Ok(());
+    }
+
+    println!("Found {} result(s) for \"{}\":\n", results.len(), query);
+    println!("{:<18} {:<10} {:<50}", "ID", "TYPE", "TITLE");
+    println!("{}", "-".repeat(80));
+
+    for item in &results {
+        let title_truncated = if item.title.len() > 47 {
+            format!("{}...", &item.title[..47])
+        } else {
+            item.title.clone()
+        };
+        println!(
+            "{:<18} {:<10} {:<50}",
+            item.id.as_str(),
+            item.content_type.to_string(),
+            title_truncated
+        );
+    }
+
+    Ok(())
+}
+
+/// Show details of a library item
+async fn show_content(content_id: &str, full: bool) -> Result<()> {
+    let catalog = Catalog::load().await?;
+
+    // Find the item by ID prefix match
+    let item = catalog
+        .items
+        .iter()
+        .find(|i| i.id.as_str().starts_with(content_id))
+        .ok_or_else(|| anyhow::anyhow!("Content not found: {}", content_id))?;
+
+    println!("╔══════════════════════════════════════════════════════════════╗");
+    println!("  ID: {}", item.id);
+    println!("  Title: {}", item.title);
+    println!("  URL: {}", item.url);
+    println!("  Type: {}", item.content_type);
+    println!("  Processed: {}", item.processed_at);
+    if !item.tags.is_empty() {
+        println!("  Tags: {}", item.tags.join(", "));
+    }
+    println!("  Artifacts: {:?}", item.artifacts);
+    if let Some(run_id) = &item.run_id {
+        println!("  Run ID: {}", run_id);
+    }
+    println!("╚══════════════════════════════════════════════════════════════╝");
+
+    if full {
+        // Load and display artifacts
+        let content = LibraryContent::load_metadata(&item.id).await?;
+
+        for artifact_name in &item.artifacts {
+            if let Some(artifact_content) = content.load_artifact(artifact_name).await? {
+                println!("\n═══ {} ═══\n", artifact_name.to_uppercase());
+                println!("{}", artifact_content);
+            }
+        }
+    } else {
+        println!("\nUse --full to show artifact contents");
+    }
+
+    Ok(())
+}
+
+/// Reprocess a library item
+async fn reprocess_content(content_id: &str) -> Result<()> {
+    let catalog = Catalog::load().await?;
+
+    // Find the item by ID prefix match
+    let item = catalog
+        .items
+        .iter()
+        .find(|i| i.id.as_str().starts_with(content_id))
+        .ok_or_else(|| anyhow::anyhow!("Content not found: {}", content_id))?;
+
+    eprintln!("🔄 Reprocessing: {}", item.title);
+    eprintln!("   URL: {}", item.url);
+
+    // Re-ingest with the same URL
+    ingest_content(&item.url, None, None, Some(item.title.clone())).await
 }

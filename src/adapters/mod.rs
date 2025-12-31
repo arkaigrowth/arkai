@@ -10,8 +10,9 @@ use std::time::Duration;
 use anyhow::Result;
 use async_trait::async_trait;
 
-// Re-export the Fabric adapter
+// Re-export the Fabric adapter and special actions
 pub use fabric::FabricAdapter;
+pub use fabric::{ACTION_YOUTUBE, ACTION_WEB};
 
 /// Output from an adapter execution
 #[derive(Debug, Clone)]

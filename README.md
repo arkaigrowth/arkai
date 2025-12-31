@@ -43,6 +43,59 @@ arkai runs --limit 10
 arkai resume <run_id>
 ```
 
+## Content Ingestion
+
+arkai can ingest and process content from YouTube videos and web pages, storing the results in a searchable library.
+
+### Ingest a YouTube video
+
+```bash
+# Auto-detects YouTube URLs
+arkai ingest "https://youtube.com/watch?v=dQw4w9WgXcQ" --tags "music,classic"
+
+# Explicitly specify type
+arkai ingest "https://youtube.com/watch?v=xyz" --content-type youtube
+```
+
+### Ingest a web page
+
+```bash
+arkai ingest "https://example.com/article" --tags "tech,ai"
+```
+
+### Browse your library
+
+```bash
+# List all items
+arkai library
+
+# Filter by type
+arkai library --content-type youtube
+
+# Search
+arkai search "transformer architecture"
+
+# Show details
+arkai show <content_id>
+arkai show <content_id> --full  # Include artifact contents
+
+# Reprocess (if patterns improve)
+arkai reprocess <content_id>
+```
+
+## Library Structure
+
+```
+~/.arkai/
+├── catalog.json              # Searchable index
+└── library/
+    └── <content_id>/         # SHA256(url)[0:16]
+        ├── metadata.json     # Title, URL, type, date
+        ├── fetch.md          # Original content
+        ├── wisdom.md         # Extracted wisdom
+        └── summary.md        # Summary
+```
+
 ## Pipeline Definition
 
 Pipelines are defined in YAML format in the `pipelines/` directory:
