@@ -1,0 +1,27 @@
+# Rust build artifacts
+/target/
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Transient runtime artifacts
+.ai/
+
+# macOS
+.DS_Store
+
+# Logs (keep logs/ directory but ignore contents)
+logs/*
+!logs/.gitkeep
+
+# Local configuration (may contain secrets)
+.env
+.env.local
+
+# Test artifacts
+*.profraw
