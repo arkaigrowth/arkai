@@ -20,6 +20,9 @@ pub struct EventStore {
 
     /// Path to the events.jsonl file
     events_path: PathBuf,
+
+    /// Path to artifacts directory
+    artifacts_dir: PathBuf,
 }
 
 impl EventStore {
@@ -27,17 +30,19 @@ impl EventStore {
     pub async fn open(run_id: Uuid) -> Result<Self> {
         let base_dir = Self::base_directory()?;
         let run_dir = base_dir.join(run_id.to_string());
+        let artifacts_dir = run_dir.join("artifacts");
 
-        // Create directory structure
-        fs::create_dir_all(&run_dir)
+        // Create directory structure including artifacts
+        fs::create_dir_all(&artifacts_dir)
             .await
-            .with_context(|| format!("Failed to create run directory: {}", run_dir.display()))?;
+            .with_context(|| format!("Failed to create artifacts directory: {}", artifacts_dir.display()))?;
 
         let events_path = run_dir.join("events.jsonl");
 
         Ok(Self {
             run_dir,
             events_path,
+            artifacts_dir,
         })
     }
 
@@ -55,6 +60,58 @@ impl EventStore {
     /// Get the run directory
     pub fn run_dir(&self) -> &Path {
         &self.run_dir
+    }
+
+    /// Get the artifacts directory
+    pub fn artifacts_dir(&self) -> &Path {
+        &self.artifacts_dir
+    }
+
+    /// Store an artifact to disk
+    pub async fn store_artifact(&self, step_name: &str, content: &str) -> Result<PathBuf> {
+        let artifact_path = self.artifacts_dir.join(format!("{}.md", step_name));
+
+        fs::write(&artifact_path, content)
+            .await
+            .with_context(|| format!("Failed to write artifact: {}", artifact_path.display()))?;
+
+        Ok(artifact_path)
+    }
+
+    /// Load an artifact from disk
+    pub async fn load_artifact(&self, step_name: &str) -> Result<Option<String>> {
+        let artifact_path = self.artifacts_dir.join(format!("{}.md", step_name));
+
+        if !artifact_path.exists() {
+            return Ok(None);
+        }
+
+        let content = fs::read_to_string(&artifact_path)
+            .await
+            .with_context(|| format!("Failed to read artifact: {}", artifact_path.display()))?;
+
+        Ok(Some(content))
+    }
+
+    /// List all artifacts in this run
+    pub async fn list_artifacts(&self) -> Result<Vec<String>> {
+        let mut artifacts = Vec::new();
+
+        if !self.artifacts_dir.exists() {
+            return Ok(artifacts);
+        }
+
+        let mut entries = fs::read_dir(&self.artifacts_dir).await?;
+
+        while let Some(entry) = entries.next_entry().await? {
+            if let Some(name) = entry.file_name().to_str() {
+                if name.ends_with(".md") {
+                    artifacts.push(name.trim_end_matches(".md").to_string());
+                }
+            }
+        }
+
+        Ok(artifacts)
     }
 
     /// Append an event to the log
@@ -191,11 +248,13 @@ mod tests {
 
         // Override the base directory for testing
         let run_dir = temp_dir.path().join(run_id.to_string());
-        std::fs::create_dir_all(&run_dir).unwrap();
+        let artifacts_dir = run_dir.join("artifacts");
+        std::fs::create_dir_all(&artifacts_dir).unwrap();
 
         let store = EventStore {
             run_dir: run_dir.clone(),
             events_path: run_dir.join("events.jsonl"),
+            artifacts_dir,
         };
 
         (store, temp_dir)

@@ -34,7 +34,9 @@ pub mod adapters;
 pub mod cli;
 pub mod core;
 pub mod domain;
+pub mod library;
 
 // Re-export main types at crate root for convenience
 pub use core::Orchestrator;
 pub use domain::{Event, EventType, Run, RunState};
+pub use library::{Catalog, CatalogItem, ContentId, ContentType, LibraryContent};

@@ -239,6 +239,9 @@ impl Orchestrator {
                     // Update tracker with output bytes
                     tracker.output_bytes += output.content.len() as u64;
 
+                    // Persist artifact to disk
+                    store.store_artifact(&step.name, &output.content).await?;
+
                     // Log success
                     let complete_event = Event::new(
                         run.id,

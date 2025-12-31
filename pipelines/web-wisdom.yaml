@@ -1,0 +1,38 @@
+# Web page content ingestion pipeline
+# Fetches page content, extracts wisdom, and summarizes
+
+name: web-wisdom
+description: Extract wisdom from web pages and articles
+
+safety_limits:
+  max_steps: 10
+  step_timeout_seconds: 180
+  max_input_bytes: 1048576   # 1MB
+  max_output_bytes: 1048576  # 1MB
+
+steps:
+  - name: fetch
+    adapter: fabric
+    action: __web__
+    input_from: pipeline_input
+    timeout_seconds: 60
+    retry_policy:
+      max_attempts: 2
+      initial_delay_ms: 2000
+
+  - name: wisdom
+    adapter: fabric
+    action: extract_wisdom
+    input_from:
+      previous_step: fetch
+    timeout_seconds: 180
+    retry_policy:
+      max_attempts: 3
+      initial_delay_ms: 2000
+
+  - name: summary
+    adapter: fabric
+    action: summarize
+    input_from:
+      previous_step: wisdom
+    timeout_seconds: 120
