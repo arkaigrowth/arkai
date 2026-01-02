@@ -38,8 +38,7 @@ impl Catalog {
 
     /// Get the catalog file path
     pub fn catalog_path() -> Result<PathBuf> {
-        let home = dirs::home_dir().context("Failed to determine home directory")?;
-        Ok(home.join(".arkai").join("catalog.json"))
+        crate::config::catalog_path()
     }
 
     /// Load the catalog from disk
