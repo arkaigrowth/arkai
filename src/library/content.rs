@@ -114,8 +114,7 @@ impl LibraryContent {
 
     /// Get the base library directory
     pub fn library_dir() -> Result<PathBuf> {
-        let home = dirs::home_dir().context("Failed to determine home directory")?;
-        Ok(home.join(".arkai").join("library"))
+        crate::config::library_dir()
     }
 
     /// Get the content directory for this item
@@ -223,10 +222,7 @@ impl LibraryContent {
 
     /// Copy artifacts from a run to the library
     pub async fn copy_from_run(&self, run_id: uuid::Uuid) -> Result<Vec<String>> {
-        let run_artifacts_dir = dirs::home_dir()
-            .context("Failed to determine home directory")?
-            .join(".arkai")
-            .join("runs")
+        let run_artifacts_dir = crate::config::runs_dir()?
             .join(run_id.to_string())
             .join("artifacts");
 

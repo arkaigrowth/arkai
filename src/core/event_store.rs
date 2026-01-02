@@ -46,10 +46,9 @@ impl EventStore {
         })
     }
 
-    /// Get the base directory for all runs (~/.arkai/runs)
+    /// Get the base directory for all runs (~/.arkai/runs or $ARKAI_HOME/runs)
     pub fn base_directory() -> Result<PathBuf> {
-        let home = dirs::home_dir().context("Failed to determine home directory")?;
-        Ok(home.join(".arkai").join("runs"))
+        crate::config::runs_dir()
     }
 
     /// Get the path to the events file
