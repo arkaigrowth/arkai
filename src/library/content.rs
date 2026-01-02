@@ -1,6 +1,7 @@
 //! Content storage for the library.
 //!
 //! Manages the storage and retrieval of processed content artifacts.
+//! Content is organized by type (youtube, articles, etc.) with content ID subdirectories.
 
 use std::path::PathBuf;
 
@@ -9,6 +10,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::fs;
+
+use crate::config;
 
 /// Content identifier (SHA256(url)[0:16])
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -114,12 +117,14 @@ impl LibraryContent {
 
     /// Get the base library directory
     pub fn library_dir() -> Result<PathBuf> {
-        crate::config::library_dir()
+        config::library_dir()
     }
 
-    /// Get the content directory for this item
+    /// Get the content directory for this item.
+    /// Uses content-type subdirectories: library/youtube/<id>/, library/articles/<id>/, etc.
     pub fn content_dir(&self) -> Result<PathBuf> {
-        Ok(Self::library_dir()?.join(self.id.as_str()))
+        let type_dir = config::content_type_dir(self.content_type)?;
+        Ok(type_dir.join(self.id.as_str()))
     }
 
     /// Get the path to a specific artifact
@@ -154,15 +159,33 @@ impl LibraryContent {
         Ok(())
     }
 
-    /// Load metadata from disk
+    /// Load metadata from disk by searching all content type directories
     pub async fn load_metadata(id: &ContentId) -> Result<Self> {
-        let path = Self::library_dir()?.join(id.as_str()).join("metadata.json");
+        // Search all content type directories for this ID
+        for content_type in [ContentType::YouTube, ContentType::Web, ContentType::Other] {
+            let type_dir = config::content_type_dir(content_type)?;
+            let path = type_dir.join(id.as_str()).join("metadata.json");
 
-        let content = fs::read_to_string(&path)
-            .await
-            .with_context(|| format!("Failed to read metadata: {}", path.display()))?;
+            if path.exists() {
+                let content = fs::read_to_string(&path)
+                    .await
+                    .with_context(|| format!("Failed to read metadata: {}", path.display()))?;
 
-        serde_json::from_str(&content).context("Failed to parse metadata JSON")
+                return serde_json::from_str(&content).context("Failed to parse metadata JSON");
+            }
+        }
+
+        // Also check legacy flat structure for backward compatibility
+        let legacy_path = Self::library_dir()?.join(id.as_str()).join("metadata.json");
+        if legacy_path.exists() {
+            let content = fs::read_to_string(&legacy_path)
+                .await
+                .with_context(|| format!("Failed to read metadata: {}", legacy_path.display()))?;
+
+            return serde_json::from_str(&content).context("Failed to parse metadata JSON");
+        }
+
+        anyhow::bail!("Content not found: {}", id)
     }
 
     /// Store an artifact
@@ -214,10 +237,20 @@ impl LibraryContent {
         Ok(artifacts)
     }
 
-    /// Check if content exists in the library
+    /// Check if content exists in the library (searches all content type directories)
     pub async fn exists(id: &ContentId) -> Result<bool> {
-        let path = Self::library_dir()?.join(id.as_str()).join("metadata.json");
-        Ok(path.exists())
+        // Check all content type directories
+        for content_type in [ContentType::YouTube, ContentType::Web, ContentType::Other] {
+            let type_dir = config::content_type_dir(content_type)?;
+            let path = type_dir.join(id.as_str()).join("metadata.json");
+            if path.exists() {
+                return Ok(true);
+            }
+        }
+
+        // Also check legacy flat structure
+        let legacy_path = Self::library_dir()?.join(id.as_str()).join("metadata.json");
+        Ok(legacy_path.exists())
     }
 
     /// Copy artifacts from a run to the library
