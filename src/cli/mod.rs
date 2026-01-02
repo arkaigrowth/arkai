@@ -94,6 +94,9 @@ pub enum Commands {
         limit: usize,
     },
 
+    /// Show resolved configuration (debug)
+    Config,
+
     /// Search the library
     Search {
         /// Search query
@@ -166,6 +169,9 @@ impl Cli {
                 title,
             } => {
                 ingest_content(&url, content_type, tags, title).await
+            }
+            Commands::Config => {
+                show_config().await
             }
             Commands::Library { content_type, limit } => {
                 list_library(content_type, limit).await
@@ -674,4 +680,45 @@ async fn reprocess_content(content_id: &str) -> Result<()> {
 
     // Re-ingest with the same URL
     ingest_content(&item.url, None, None, Some(item.title.clone())).await
+}
+
+/// Show the resolved configuration (for debugging)
+async fn show_config() -> Result<()> {
+    use crate::config;
+    use crate::library::ContentType;
+
+    let cfg = config::config()?;
+
+    println!("╔══════════════════════════════════════════════════════════════╗");
+    println!("  ArkAI Configuration");
+    println!("╚══════════════════════════════════════════════════════════════╝");
+    println!();
+    println!("Config file: {}", cfg.config_file.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "(none - using defaults)".to_string()));
+    println!();
+    println!("Paths:");
+    println!("  Home (engine state): {}", cfg.home.display());
+    println!("  Library (content):   {}", cfg.library.display());
+    println!("  Runs:                {}", cfg.home.join("runs").display());
+    println!("  Catalog:             {}", cfg.home.join("catalog.json").display());
+    println!();
+    println!("Content type directories:");
+    println!("  YouTube:  {}", config::content_type_dir(ContentType::YouTube)?.display());
+    println!("  Web:      {}", config::content_type_dir(ContentType::Web)?.display());
+    println!("  Other:    {}", config::content_type_dir(ContentType::Other)?.display());
+    println!();
+    println!("Content type mappings:");
+    if cfg.content_types.is_empty() {
+        println!("  (using defaults)");
+    } else {
+        for (k, v) in &cfg.content_types {
+            println!("  {}: {}", k, v);
+        }
+    }
+    println!();
+    println!("Safety limits:");
+    println!("  Max steps:      {}", cfg.safety.max_steps);
+    println!("  Timeout:        {}s", cfg.safety.timeout_seconds);
+    println!("  Max input size: {} bytes", cfg.safety.max_input_size_bytes);
+
+    Ok(())
 }
