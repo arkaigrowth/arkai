@@ -6,7 +6,7 @@
 //! # Special Actions
 //!
 //! The adapter supports special action prefixes for content fetching:
-//! - `__youtube__`: Fetch YouTube transcript (uses `fabric -y <url> --transcript`)
+//! - `__youtube__`: Fetch YouTube transcript with timestamps (uses `fabric -y <url> --transcript-with-timestamps`)
 //! - `__web__`: Fetch web page content (uses `fabric -u <url>`)
 //! - All other actions are treated as pattern names (uses `fabric -p <pattern>`)
 
@@ -120,7 +120,7 @@ impl FabricAdapter {
         Ok(stdout)
     }
 
-    /// Fetch YouTube transcript via fabric -y <url> --transcript
+    /// Fetch YouTube transcript via fabric -y <url> --transcript-with-timestamps
     async fn fetch_youtube(
         &self,
         url: &str,
@@ -129,7 +129,7 @@ impl FabricAdapter {
         let output = timeout(
             step_timeout,
             Command::new(&self.binary_path)
-                .args(["-y", url, "--transcript"])
+                .args(["-y", url, "--transcript-with-timestamps"])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .output(),

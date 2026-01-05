@@ -27,8 +27,8 @@ logs/*
 *.profraw
 
 # arkai runtime (if used locally for testing)
-.arkai/
-library/
+/.arkai/
+/library/
 
 # Keep structure for docs but not generated content
 !docs/
