@@ -25,3 +25,10 @@ logs/*
 
 # Test artifacts
 *.profraw
+
+# arkai runtime (if used locally for testing)
+.arkai/
+library/
+
+# Keep structure for docs but not generated content
+!docs/
