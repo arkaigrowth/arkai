@@ -1,0 +1,27 @@
+# arkai Banner Prompts
+# Use with Midjourney, DALL-E, or similar
+
+## 1. Abstract Tech (Clean)
+A minimalist abstract visualization of a spine made of glowing blue circuit traces, 
+connecting floating hexagonal nodes, dark background, subtle gradient from deep blue 
+to teal, professional tech aesthetic, 16:9 aspect ratio
+
+## 2. Architecture Diagram Style
+Isometric 3D illustration of data flowing through a crystalline spine structure, 
+rust-orange accent colors, dark navy background, nodes labeled "ingest", "transform", 
+"store", modern SaaS style, clean vector aesthetic
+
+## 3. Metaphorical
+A polished steel vertebral column standing upright, with streams of luminous data 
+particles flowing through it, cyberpunk meets medical illustration, dramatic lighting, 
+dark background with subtle grid
+
+## 4. Minimal Logo-Style
+Simple geometric spine icon, three connected rectangular segments, rust/orange 
+gradient, centered on dark background, would work as favicon at small sizes, 
+ultra-clean vector style
+
+## 5. Hero Banner (Wide)
+Panoramic view of an abstract neural network backbone, glowing orange connection 
+points, dark blue-gray background, subtle topographic line patterns, modern tech 
+company hero image style, 21:9 ultrawide aspect ratio
