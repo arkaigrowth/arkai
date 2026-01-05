@@ -5,6 +5,7 @@
 
 use std::io::{self, Read};
 use std::path::PathBuf;
+use std::process::Command;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -396,8 +397,36 @@ fn detect_content_type(url: &str) -> ContentType {
     }
 }
 
+/// Get YouTube video title using yt-dlp
+/// Returns None if not a YouTube URL or if yt-dlp fails
+fn get_youtube_title(url: &str) -> Option<String> {
+    let url_lower = url.to_lowercase();
+    if !url_lower.contains("youtube.com") && !url_lower.contains("youtu.be") {
+        return None;
+    }
+
+    let output = Command::new("yt-dlp")
+        .args(["--get-title", "--no-warnings", url])
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        String::from_utf8(output.stdout)
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    } else {
+        None
+    }
+}
+
 /// Extract title from content (first non-empty line or fallback to URL)
 fn extract_title(content: &str, url: &str) -> String {
+    // First try to get YouTube title via yt-dlp (fast metadata lookup)
+    if let Some(title) = get_youtube_title(url) {
+        return title;
+    }
+
     // Try to extract title from first line (often contains title in transcripts)
     content
         .lines()

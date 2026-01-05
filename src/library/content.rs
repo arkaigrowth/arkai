@@ -13,6 +13,42 @@ use tokio::fs;
 
 use crate::config;
 
+/// Sanitize a string for use as a filename
+/// Removes/replaces characters that are problematic on common filesystems
+fn sanitize_filename(name: &str) -> String {
+    name.chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            '\0'..='\x1f' => '_', // Control characters
+            _ => c,
+        })
+        .collect::<String>()
+        .trim()
+        .chars()
+        .take(80) // Limit length for filesystem compatibility
+        .collect()
+}
+
+/// Extract video ID from YouTube URL
+fn extract_video_id_from_url(url: &str) -> Option<String> {
+    let url_lower = url.to_lowercase();
+
+    if url_lower.contains("youtu.be/") {
+        url.split("youtu.be/")
+            .nth(1)
+            .and_then(|s| s.split('?').next())
+            .and_then(|s| s.split('&').next())
+            .map(|s| s.to_string())
+    } else if url_lower.contains("youtube.com") {
+        url.split("v=")
+            .nth(1)
+            .and_then(|s| s.split('&').next())
+            .map(|s| s.to_string())
+    } else {
+        None
+    }
+}
+
 /// Content identifier (SHA256(url)[0:16])
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ContentId(String);
@@ -120,11 +156,53 @@ impl LibraryContent {
         config::library_dir()
     }
 
+    /// Get the source identifier for folder naming
+    /// For YouTube: returns video ID (e.g., "XvGeXQ7js_o")
+    /// For others: returns first 8 chars of content hash
+    pub fn source_id(&self) -> String {
+        extract_video_id_from_url(&self.url)
+            .unwrap_or_else(|| self.id.as_str()[..8.min(self.id.as_str().len())].to_string())
+    }
+
+    /// Generate a human-readable folder name: "Title (source_id)"
+    pub fn folder_name(&self) -> String {
+        let safe_title = sanitize_filename(&self.title);
+        let source_id = self.source_id();
+        format!("{} ({})", safe_title, source_id)
+    }
+
     /// Get the content directory for this item.
-    /// Uses content-type subdirectories: library/youtube/<id>/, library/articles/<id>/, etc.
+    /// Uses content-type subdirectories with human-readable folder names:
+    /// library/youtube/Video Title (XvGeXQ7js_o)/
     pub fn content_dir(&self) -> Result<PathBuf> {
         let type_dir = config::content_type_dir(self.content_type)?;
-        Ok(type_dir.join(self.id.as_str()))
+        Ok(type_dir.join(self.folder_name()))
+    }
+
+    /// Find content directory by content ID (searches for folder containing the ID)
+    pub async fn find_content_dir(id: &ContentId, content_type: ContentType) -> Result<Option<PathBuf>> {
+        let type_dir = config::content_type_dir(content_type)?;
+
+        if !type_dir.exists() {
+            return Ok(None);
+        }
+
+        let mut entries = fs::read_dir(&type_dir).await?;
+        let id_str = id.as_str();
+
+        while let Some(entry) = entries.next_entry().await? {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+
+            // Check if this folder contains our content ID or matches old hash format
+            if name_str.contains(&format!("({})", &id_str[..8.min(id_str.len())]))
+                || name_str == id_str
+            {
+                return Ok(Some(entry.path()));
+            }
+        }
+
+        Ok(None)
     }
 
     /// Get the path to a specific artifact
@@ -160,22 +238,33 @@ impl LibraryContent {
     }
 
     /// Load metadata from disk by searching all content type directories
+    /// Supports both new "Title (id)" format and legacy hash-only format
     pub async fn load_metadata(id: &ContentId) -> Result<Self> {
         // Search all content type directories for this ID
         for content_type in [ContentType::YouTube, ContentType::Web, ContentType::Other] {
+            // Try new "Title (id)" folder format first
+            if let Some(content_dir) = Self::find_content_dir(id, content_type).await? {
+                let path = content_dir.join("metadata.json");
+                if path.exists() {
+                    let content = fs::read_to_string(&path)
+                        .await
+                        .with_context(|| format!("Failed to read metadata: {}", path.display()))?;
+                    return serde_json::from_str(&content).context("Failed to parse metadata JSON");
+                }
+            }
+
+            // Fallback: try legacy hash-only folder format
             let type_dir = config::content_type_dir(content_type)?;
-            let path = type_dir.join(id.as_str()).join("metadata.json");
-
-            if path.exists() {
-                let content = fs::read_to_string(&path)
+            let legacy_path = type_dir.join(id.as_str()).join("metadata.json");
+            if legacy_path.exists() {
+                let content = fs::read_to_string(&legacy_path)
                     .await
-                    .with_context(|| format!("Failed to read metadata: {}", path.display()))?;
-
+                    .with_context(|| format!("Failed to read metadata: {}", legacy_path.display()))?;
                 return serde_json::from_str(&content).context("Failed to parse metadata JSON");
             }
         }
 
-        // Also check legacy flat structure for backward compatibility
+        // Also check legacy flat structure (library/<id>/) for backward compatibility
         let legacy_path = Self::library_dir()?.join(id.as_str()).join("metadata.json");
         if legacy_path.exists() {
             let content = fs::read_to_string(&legacy_path)
@@ -238,9 +327,18 @@ impl LibraryContent {
     }
 
     /// Check if content exists in the library (searches all content type directories)
+    /// Supports both new "Title (id)" format and legacy hash-only format
     pub async fn exists(id: &ContentId) -> Result<bool> {
         // Check all content type directories
         for content_type in [ContentType::YouTube, ContentType::Web, ContentType::Other] {
+            // Try new "Title (id)" folder format
+            if let Some(content_dir) = Self::find_content_dir(id, content_type).await? {
+                if content_dir.join("metadata.json").exists() {
+                    return Ok(true);
+                }
+            }
+
+            // Fallback: try legacy hash-only folder format
             let type_dir = config::content_type_dir(content_type)?;
             let path = type_dir.join(id.as_str()).join("metadata.json");
             if path.exists() {
