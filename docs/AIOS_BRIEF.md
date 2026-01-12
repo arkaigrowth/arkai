@@ -52,6 +52,36 @@
 - **Semantic search** → Vector DB
 - **Primary content storage** → Files (library/)
 
+### Intent Routing: 3-Layer Brain
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ Layer 1: REFLEXES (Instant, Deterministic)                       │
+│ • URL regex matching → route to correct pipeline                 │
+│ • youtube.com/* → youtube-wisdom pipeline                        │
+│ • podcasts.apple.com/* → podcast pipeline (future)               │
+│ • Cost: 0 tokens, <1ms                                           │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓ (if no match)
+┌─────────────────────────────────────────────────────────────────┐
+│ Layer 2: LEARNED PATTERNS (Fast, Low-cost)                       │
+│ • Keyword matching from past successful routes                   │
+│ • "summarize" → summarize pattern                                │
+│ • "wisdom" → extract_wisdom pattern                              │
+│ • Cost: 0 tokens, <10ms                                          │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓ (if ambiguous)
+┌─────────────────────────────────────────────────────────────────┐
+│ Layer 3: LLM FALLBACK (Accurate, Higher-cost)                    │
+│ • Claude Code translates natural language → CLI                  │
+│ • "learn from this podcast" → arkai ingest <url> --tags ...      │
+│ • Used for edge cases and discovery                              │
+│ • Cost: ~100-500 tokens                                          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Design Bias**: Prefer Layer 1 > Layer 2 > Layer 3. Deterministic beats probabilistic.
+
 ---
 
 ## Storage Architecture
@@ -63,34 +93,45 @@ Files (library/)         →  Human-readable, git-trackable, portable
 Indexes (.arkai/)        →  Derived, regenerable, optional
 ```
 
-### Canonical Directory Structure
+### Canonical Library Location
 
 ```
-project-root/
+~/AI/fabric-arkai/library/      # PRIMARY content storage (visible, git-trackable)
+~/.arkai/                       # DERIVED data (catalog, runs, indexes)
+```
+
+### Directory Structure
+
+```
+~/AI/fabric-arkai/
 ├── library/                    # SOURCE OF TRUTH (git-track)
 │   ├── youtube/
-│   │   └── <sha256-hash>/      # Content-addressable
+│   │   └── Video Title (XvGeXQ7js_o)/   # Human-readable + source ID
 │   │       ├── metadata.json   # URL, title, tags, timestamps
-│   │       ├── transcript.md   # Raw content
+│   │       ├── fetch.md        # Raw transcript
 │   │       └── wisdom.md       # AI-extracted insights
 │   ├── articles/
 │   └── podcasts/
 │
-├── pipelines/                  # Custom workflows (optional)
-│   └── my-workflow.yaml
+├── custom-patterns/            # Your fabric patterns
+│   └── my_pattern/system.md
 │
-└── .arkai/                     # DERIVED DATA (gitignore)
-    ├── config.yaml             # Project config
-    ├── catalog.json            # Quick lookup index
-    ├── vectors.lance           # Future: semantic search
-    └── runs/                   # Event logs
-        └── <run-id>/
-            └── events.jsonl
+└── scripts/                    # Automation tools
+
+~/.arkai/                       # DERIVED DATA (can regenerate)
+├── config.yaml                 # Global config
+├── catalog.json                # Quick lookup index
+├── vectors.lance               # Future: semantic search
+└── runs/                       # Event logs
+    └── <run-id>/events.jsonl
 ```
 
 ### Content Addressing
 
-- **Content ID** = `SHA256(canonical_url)[0:16]`
+- **Content ID** = `SHA256(canonical_url)[0:16]` (for catalog lookups)
+- **Folder Name** = `"Title (source_id)"` (human-readable)
+  - YouTube: `source_id` = video ID (e.g., `XvGeXQ7js_o`)
+  - Web: `source_id` = first 8 chars of content hash
 - Same URL always produces same ID (deduplication)
 - Deterministic, collision-resistant
 
@@ -118,11 +159,11 @@ project-root/
     {
       "id": "9cd097ea928aa2dc",
       "content_type": "youtube",
-      "url": "https://youtube.com/watch?v=...",
-      "title": "Video Title",
+      "url": "https://youtube.com/watch?v=XvGeXQ7js_o",
+      "title": "Run YOUR own UNCENSORED AI",
       "tags": ["ai", "learning"],
       "created_at": "2024-01-02T10:00:00Z",
-      "path": "library/youtube/9cd097ea928aa2dc"
+      "path": "library/youtube/Run YOUR own UNCENSORED AI (XvGeXQ7js_o)"
     }
   ]
 }
