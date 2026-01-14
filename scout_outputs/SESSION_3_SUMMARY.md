@@ -321,6 +321,27 @@ Our `__skill__:<name>` approach is aligned with Chad's proposal:
 
 ---
 
+## Skills Integration (Added End of Session)
+
+### Skill Contract
+- `__skill__:<name>` pipeline action format
+- `arkai tool <name> --json-input` invocation
+- Skills output `manifest.json` with artifacts list
+- Verification artifacts: `verification.json`, `verification.log`
+
+### Skill ↔ Pattern Hybrid
+```yaml
+steps:
+  - action: __skill__:math-params    # Skill collects params
+  - action: math_decompose           # Pattern processes
+  - action: __skill__:math-verify    # Skill verifies
+```
+
+### Non-Text Grounding
+Math/code uses `grounding_type: "verification"` with Python proof.
+
+---
+
 ## Open Questions for Olek
 
 1. **Timestamped transcript sample**: Run `fabric -y <url> --transcript-with-timestamps` and share first 40 lines
