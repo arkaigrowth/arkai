@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use uuid::Uuid;
 
-use crate::adapters::{ACTION_WEB, ACTION_YOUTUBE};
+use crate::adapters::{Adapter, FabricAdapter, ACTION_WEB, ACTION_YOUTUBE};
 use crate::core::{Orchestrator, Pipeline};
 use crate::library::{Catalog, CatalogItem, ContentType, LibraryContent};
 
@@ -119,6 +119,24 @@ pub enum Commands {
         /// Content ID to reprocess
         content_id: String,
     },
+
+    /// Run a Fabric pattern directly
+    Pattern {
+        /// Pattern name (e.g., "astro", "extract_wisdom", "summarize")
+        pattern_name: String,
+
+        /// Input file (reads from stdin if not provided)
+        #[arg(short, long)]
+        input: Option<PathBuf>,
+
+        /// Save output to library with this title
+        #[arg(short, long)]
+        save: Option<String>,
+
+        /// Tags to apply when saving (comma-separated)
+        #[arg(short, long)]
+        tags: Option<String>,
+    },
 }
 
 /// Content type for CLI (maps to ContentType)
@@ -185,6 +203,14 @@ impl Cli {
             }
             Commands::Reprocess { content_id } => {
                 reprocess_content(&content_id).await
+            }
+            Commands::Pattern {
+                pattern_name,
+                input,
+                save,
+                tags,
+            } => {
+                run_pattern(&pattern_name, input, save, tags).await
             }
         }
     }
@@ -748,6 +774,88 @@ async fn show_config() -> Result<()> {
     println!("  Max steps:      {}", cfg.safety.max_steps);
     println!("  Timeout:        {}s", cfg.safety.timeout_seconds);
     println!("  Max input size: {} bytes", cfg.safety.max_input_size_bytes);
+
+    Ok(())
+}
+
+/// Run a Fabric pattern directly
+async fn run_pattern(
+    pattern_name: &str,
+    input_file: Option<PathBuf>,
+    save_title: Option<String>,
+    tags: Option<String>,
+) -> Result<()> {
+    use std::time::Duration;
+
+    // Get input from file or stdin
+    let input = if let Some(path) = input_file {
+        std::fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read input file: {}", path.display()))?
+    } else {
+        // Read from stdin
+        let mut buffer = String::new();
+        io::stdin()
+            .read_to_string(&mut buffer)
+            .context("Failed to read from stdin")?;
+        buffer
+    };
+
+    if input.trim().is_empty() {
+        anyhow::bail!("No input provided. Use --input <file> or pipe to stdin");
+    }
+
+    eprintln!("🔮 Running pattern: {}", pattern_name);
+
+    // Execute the pattern via Fabric adapter
+    let adapter = FabricAdapter::new();
+    let timeout = Duration::from_secs(300); // 5 minutes for patterns
+
+    let output = adapter
+        .execute(pattern_name, &input, timeout)
+        .await
+        .with_context(|| format!("Failed to run pattern '{}'", pattern_name))?;
+
+    // Print the output
+    println!("{}", output.content);
+
+    // Optionally save to library
+    if let Some(title) = save_title {
+        eprintln!("\n📚 Saving to library...");
+
+        // Create a unique ID for the pattern output
+        let content_id = format!(
+            "pattern-{}-{}",
+            pattern_name,
+            &uuid::Uuid::new_v4().to_string()[..8]
+        );
+
+        // Update catalog
+        let mut catalog = Catalog::load().await?;
+        let mut item = CatalogItem::new(
+            &format!("pattern://{}", pattern_name),
+            &title,
+            ContentType::Other,
+        );
+
+        // Add tags if provided
+        if let Some(tags_str) = tags {
+            let tag_list: Vec<String> = tags_str
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            item = item.with_tags(tag_list);
+        }
+
+        // Add the pattern name as a tag too
+        item.tags.push(format!("pattern:{}", pattern_name));
+
+        catalog.add(item);
+        catalog.save().await?;
+
+        eprintln!("   ID: {}", content_id);
+        eprintln!("   Title: {}", title);
+    }
 
     Ok(())
 }
