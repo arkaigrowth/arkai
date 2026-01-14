@@ -517,6 +517,97 @@ Recommended V1 throttle:
 
 ---
 
+## Skills Integration
+
+> Skills = Claude Code Python scripts that become first-class pipeline steps via `__skill__:<name>` actions.
+
+### Skill Contract
+
+Every skill must:
+1. Accept `--json-input` for structured parameters
+2. Output artifacts to specified directory
+3. Produce `manifest.json` describing outputs
+4. Return JSON result to stdout
+
+```bash
+# Invocation
+arkai tool <skill_name> --json-input '{"param": "value"}'
+
+# Pipeline action
+action: __skill__:math-verify
+```
+
+### Skill Manifest Schema
+
+Skills output `manifest.json`:
+```json
+{
+  "skill": "math-verify",
+  "success": true,
+  "artifacts": [
+    {"name": "verification.json", "type": "structured", "path": "./verification.json"},
+    {"name": "verification.log", "type": "log", "path": "./verification.log"}
+  ],
+  "result": {"passed": true, "score": 0.95}
+}
+```
+
+### Skill ↔ Pattern Hybrid Flows
+
+Skills can invoke fabric patterns; patterns can trigger skills:
+
+```yaml
+# Example: math-coach pipeline
+steps:
+  - name: params
+    action: __skill__:math-params       # Skill collects user params
+  - name: decompose
+    action: math_decompose              # Fabric pattern breaks down problem
+  - name: verify
+    action: __skill__:math-verify       # Skill runs Python verification
+  - name: explain
+    action: math_explain                # Fabric pattern generates explanation
+```
+
+### Verification Artifacts
+
+For skills with Python verification:
+- `verification.json` - Structured results (pass/fail, scores, errors)
+- `verification.log` - Execution trace
+- Both stored in `library/<type>/<id>/` alongside content
+
+### Grounding Non-Text Content
+
+For math/code/structured content, extend evidence model:
+- **Derivation chains**: Link conclusions to axioms
+- **Verification proofs**: Python output as "evidence"
+- **Formula spans**: Reference equation numbers, not byte offsets
+
+```json
+{
+  "claim": "Queue wait time is O(λ²)",
+  "grounding_type": "verification",
+  "verification": {
+    "script": "verify_queue_theory.py",
+    "result": "passed",
+    "output_path": "./verification.json"
+  }
+}
+```
+
+### Skill Locations
+
+```
+~/.claude/skills/<skill_name>/
+├── scripts/
+│   ├── main.py           # Entry point
+│   └── verify.py         # Verification logic
+├── SKILL.md              # Documentation
+└── manifest.json         # Skill metadata
+```
+
+---
+
 ## CLI Interface
 
 ### Core Commands
