@@ -15,6 +15,8 @@ use crate::adapters::{Adapter, FabricAdapter, ACTION_WEB, ACTION_YOUTUBE};
 use crate::core::{Orchestrator, Pipeline};
 use crate::library::{Catalog, CatalogItem, ContentType, LibraryContent};
 
+pub mod evidence;
+
 /// arkai - Event-sourced AI pipeline orchestrator
 #[derive(Parser, Debug)]
 #[command(name = "arkai")]
@@ -137,6 +139,12 @@ pub enum Commands {
         #[arg(short, long)]
         tags: Option<String>,
     },
+
+    /// Manage evidence and provenance
+    Evidence {
+        #[command(subcommand)]
+        command: evidence::EvidenceCommands,
+    },
 }
 
 /// Content type for CLI (maps to ContentType)
@@ -212,6 +220,24 @@ impl Cli {
             } => {
                 run_pattern(&pattern_name, input, save, tags).await
             }
+            Commands::Evidence { command } => {
+                execute_evidence(command).await
+            }
+        }
+    }
+}
+
+/// Execute evidence subcommands
+async fn execute_evidence(command: evidence::EvidenceCommands) -> Result<()> {
+    match command {
+        evidence::EvidenceCommands::Show { evidence_id } => {
+            evidence::execute_show(&evidence_id).await
+        }
+        evidence::EvidenceCommands::Open { evidence_id } => {
+            evidence::execute_open(&evidence_id).await
+        }
+        evidence::EvidenceCommands::Validate { content_id } => {
+            evidence::execute_validate(&content_id).await
         }
     }
 }
