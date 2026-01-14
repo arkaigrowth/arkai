@@ -447,4 +447,52 @@ mod tests {
         assert!(result.matches.is_empty());
         assert!(result.normalized_hint);
     }
+
+    #[test]
+    fn test_jsonl_newline_escaping() {
+        // CRITICAL: Evidence containing newlines must serialize to single-line JSONL
+        // serde_json::to_string should escape \n as \\n in the output
+        use crate::evidence::types::{Evidence, Resolution, ResolutionMethod, Span, Status};
+
+        let evidence = Evidence {
+            id: "test123".to_string(),
+            content_id: "abc".to_string(),
+            claim: "Multi-line\nclaim".to_string(),
+            quote: "Quote with\nnewlines\nand more".to_string(),
+            quote_sha256: "sha256:test".to_string(),
+            status: Status::Resolved,
+            resolution: Resolution {
+                method: ResolutionMethod::Exact,
+                match_count: 1,
+                match_rank: 1,
+                reason: None,
+            },
+            span: Some(Span {
+                artifact: "transcript.md".to_string(),
+                utf8_byte_offset: [0, 10],
+                slice_sha256: "sha256:slice".to_string(),
+                anchor_text: Some("Context with\nnewline".to_string()),
+                video_timestamp: None,
+            }),
+            confidence: 0.9,
+            extractor: "test".to_string(),
+            ts: "2026-01-12T00:00:00Z".to_string(),
+        };
+
+        let json = serde_json::to_string(&evidence).unwrap();
+
+        // JSONL requirement: no literal newlines in output
+        assert!(
+            !json.contains('\n'),
+            "JSONL line must not contain literal newlines. Got: {}",
+            json
+        );
+
+        // Verify the escaped newlines are present
+        assert!(json.contains("\\n"), "Newlines should be escaped as \\n");
+
+        // Verify it deserializes correctly
+        let parsed: Evidence = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.quote, "Quote with\nnewlines\nand more");
+    }
 }
