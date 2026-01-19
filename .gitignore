@@ -32,3 +32,6 @@ logs/*
 
 # Keep structure for docs but not generated content
 !docs/
+
+# Obsidian vault sandbox (working copy for analysis)
+vault-sandbox/

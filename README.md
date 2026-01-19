@@ -178,6 +178,18 @@ arkai ingest "https://youtube.com/watch?v=..." --tags "ai,ml"
 arkai ingest "https://example.com/article" --tags "tech"
 ```
 
+### Massive Context Analysis (RLM)
+```bash
+# Analyze entire repositories that exceed context windows
+# Uses Recursive Language Model (MIT paper: arxiv.org/html/2512.24601v1)
+
+# In Claude Code, RLM tools are available as MCP:
+rlm_load_context      # Load files as external variables
+rlm_filter_context    # Regex-based filtering (deterministic)
+rlm_sub_query         # LLM call on chunks (budgeted)
+rlm_exec             # Sandboxed Python execution (HITL)
+```
+
 ### Searchable Library
 ```bash
 arkai library                    # List all
@@ -256,6 +268,8 @@ steps:
 | 200+ AI patterns | ❌ | ⚠️ | ✅ | ✅ |
 | Content library | ❌ | ❌ | ❌ | ✅ |
 | Single binary | ❌ | ❌ | ✅ | ✅ |
+| Massive context (RLM) | ❌ | ⚠️ | ❌ | ✅ |
+| Evidence provenance | ❌ | ❌ | ❌ | ✅ |
 
 ---
 
