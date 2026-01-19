@@ -1,0 +1,16 @@
+{
+  "defaultNote": "daily",
+  "useMoment": true,
+  "momentFormat": "YYYY-MM-DD",
+  "workspace": "",
+  "workspaceEnabled": false,
+  "hasRibbonIcon": true,
+  "openOnStartup": true,
+  "openMode": "Replace all open notes",
+  "manualOpenMode": "Keep open notes",
+  "view": "default",
+  "refreshDataview": true,
+  "autoCreate": true,
+  "autoScroll": false,
+  "pin": false
+}

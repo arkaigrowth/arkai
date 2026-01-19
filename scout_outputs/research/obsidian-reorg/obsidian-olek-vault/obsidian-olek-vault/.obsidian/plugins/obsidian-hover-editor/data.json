@@ -1,0 +1,11 @@
+{
+  "triggerDelay": 300,
+  "closeDelay": 400,
+  "autoFocus": true,
+  "rollDown": true,
+  "snapToEdges": true,
+  "initialHeight": 340,
+  "initialWidth": 500,
+  "showViewHeader": true,
+  "autoPin": false
+}

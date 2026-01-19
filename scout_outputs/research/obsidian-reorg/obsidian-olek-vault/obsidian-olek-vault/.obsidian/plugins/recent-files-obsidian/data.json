@@ -1,0 +1,11 @@
+{
+  "recentFilesDisplayCount": 15,
+  "openTypeStyle": "newPane",
+  "showInRibbon": true,
+  "showShortcuts": true,
+  "showTags": true,
+  "omittedPaths": [
+    "Templates/",
+    ".obsidian/"
+  ]
+}

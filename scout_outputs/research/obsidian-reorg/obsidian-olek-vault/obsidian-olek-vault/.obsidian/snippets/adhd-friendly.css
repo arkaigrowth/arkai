@@ -1,0 +1,170 @@
+/* ADHD-Friendly Obsidian Theme Tweaks */
+/* Enable in Settings > Appearance > CSS Snippets */
+
+/* ===== REDUCE VISUAL NOISE ===== */
+.workspace-ribbon {
+  opacity: 0.7;
+}
+.workspace-ribbon:hover {
+  opacity: 1;
+}
+
+/* Softer colors for less eye strain */
+:root {
+  --background-modifier-hover: rgba(var(--mono-rgb-100), 0.08);
+  --background-modifier-active-hover: rgba(var(--mono-rgb-100), 0.12);
+}
+
+/* ===== BETTER VISUAL HIERARCHY ===== */
+
+/* Make headings more distinct */
+.cm-header-1, .markdown-preview-view h1 {
+  font-size: 1.8em !important;
+  border-bottom: 2px solid var(--interactive-accent);
+  padding-bottom: 0.3em;
+  margin-top: 1.5em;
+}
+
+.cm-header-2, .markdown-preview-view h2 {
+  font-size: 1.4em !important;
+  color: var(--text-accent);
+  margin-top: 1.2em;
+}
+
+/* ===== COLOR-CODED TAGS ===== */
+
+/* Work tags */
+a.tag[href*="catsy"] {
+  background-color: #4CAF50 !important;
+  color: white !important;
+}
+
+a.tag[href*="arkai"] {
+  background-color: #9C27B0 !important;
+  color: white !important;
+}
+
+/* Priority tags */
+a.tag[href*="urgent"] {
+  background-color: #f44336 !important;
+  color: white !important;
+}
+
+a.tag[href*="important"] {
+  background-color: #FF9800 !important;
+  color: white !important;
+}
+
+/* Type tags */
+a.tag[href*="meeting"] {
+  background-color: #2196F3 !important;
+  color: white !important;
+}
+
+a.tag[href*="project"] {
+  background-color: #673AB7 !important;
+  color: white !important;
+}
+
+a.tag[href*="daily"] {
+  background-color: #607D8B !important;
+  color: white !important;
+}
+
+/* ===== BETTER TASK VISIBILITY ===== */
+
+/* Uncompleted tasks stand out */
+.markdown-source-view .task-list-item-checkbox:not(:checked) {
+  border: 2px solid var(--interactive-accent);
+}
+
+/* Completed tasks fade */
+.markdown-source-view .task-list-item.is-checked {
+  opacity: 0.6;
+  text-decoration: line-through;
+}
+
+/* ===== CLEANER FILE EXPLORER ===== */
+
+/* More spacing between items */
+.nav-file-title {
+  padding: 4px 8px;
+}
+
+/* Folder styling */
+.nav-folder-title {
+  font-weight: 600;
+}
+
+/* ===== BETTER LINKS ===== */
+
+/* Internal links more visible */
+.cm-hmd-internal-link,
+.internal-link {
+  color: var(--text-accent);
+  text-decoration: none;
+  border-bottom: 1px dashed var(--text-accent);
+}
+
+.cm-hmd-internal-link:hover,
+.internal-link:hover {
+  border-bottom: 1px solid var(--text-accent);
+}
+
+/* Unresolved links (missing notes) in red */
+.is-unresolved {
+  color: #f44336 !important;
+  opacity: 0.8;
+}
+
+/* ===== DATAVIEW STYLING ===== */
+
+/* Better dataview tables */
+.dataview.table-view-table {
+  font-size: 0.95em;
+}
+
+.dataview.table-view-table th {
+  background-color: var(--background-secondary);
+  font-weight: 600;
+}
+
+.dataview.table-view-table tr:nth-child(even) {
+  background-color: var(--background-secondary-alt);
+}
+
+/* ===== CALENDAR PLUGIN ===== */
+
+/* Today's date highlight */
+.day.active {
+  background-color: var(--interactive-accent) !important;
+  color: white !important;
+  border-radius: 4px;
+}
+
+/* Days with notes */
+.day.has-note::after {
+  background-color: var(--interactive-accent);
+}
+
+/* ===== RECENT FILES ===== */
+
+/* Highlight recent files panel */
+.workspace-leaf-content[data-type="recent-files"] {
+  border-left: 3px solid var(--interactive-accent);
+}
+
+/* ===== FOCUS MODE ENHANCEMENT ===== */
+
+/* When editing, dim everything else */
+.workspace-leaf.mod-active .view-content {
+  background-color: var(--background-primary);
+}
+
+/* ===== RESPONSIVE TWEAKS ===== */
+
+@media (max-width: 768px) {
+  .workspace-ribbon {
+    display: none;
+  }
+}

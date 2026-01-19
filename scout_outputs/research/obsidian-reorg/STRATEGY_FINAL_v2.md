@@ -756,3 +756,146 @@ If tedious → simplify further. The goal is findability, not link count.
 - **ROADMAP.md** - Future work (voice memos, Todoist, embeddings)
 - **ADHD_NOTE_SYSTEM_RESEARCH.md** - Full research on note-taking methods
 
+
+---
+
+## Addendum: Chad's Pre-Execution Safeguards (Added 2026-01-17)
+
+### 1. New Stop Condition
+
+**Added to Phase 3 → Phase 4 gate:**
+- If >5% of notes have `move_candidate.confidence < 0.85` → **HALT**
+- Prevents accidental reorg spree
+- Forces prompt refinement before proceeding
+
+### 2. Plugin Strategy: Disable-First
+
+**Phase 0.5 revised approach:**
+```
+Step 1: DISABLE nonessential plugins in sandbox (don't delete)
+Step 2: Verify vault stability (opens, no errors)
+Step 3: Test core functionality (daily notes, search, links)
+Step 4: ONLY THEN consider permanent removal
+```
+
+### 3. Privacy Gating (Inventory + Labeling)
+
+**Hard-skip (never process):**
+- `.aiexclude` patterns
+- `.obsidian/`
+- `.trash/`
+- `Attachments/` (media files, not text)
+- `.space/` and `.makemd/` (Make.md artifacts)
+
+**Secret detection patterns (flag + skip LLM):**
+```regex
+api[_-]?key
+api[_-]?secret
+token
+password
+private[_-]?key
+secret[_-]?key
+bearer
+credentials
+```
+
+If pattern detected → add to `risk_flags: ["credentials"]` → skip LLM labeling for that note.
+
+### 4. Make.md Cleanup: Quarantine-First
+
+**Revised cleanup steps:**
+```bash
+# Step 1: QUARANTINE (don't delete)
+mkdir -p vault-sandbox/System/_quarantine/
+mv vault-sandbox/.space vault-sandbox/System/_quarantine/
+mv vault-sandbox/.makemd vault-sandbox/System/_quarantine/
+find vault-sandbox -name ".space" -type d -exec mv {} vault-sandbox/System/_quarantine/ \;
+
+# Step 2: VERIFY
+# Open vault in Obsidian, check:
+# - Vault opens without errors
+# - Daily notes work
+# - Search works
+# - No broken links from make-md removal
+
+# Step 3: ONLY THEN delete (after human confirmation)
+# rm -rf vault-sandbox/System/_quarantine/
+```
+
+### 5. Daily Notes Contract (LOCKED)
+
+**Filename format:** `MM-DD-yyyy-EEE.md`
+- Example: `01-17-2026-Fri.md`
+- Location: `Daily Notes/` only
+- Title goes in H1 inside note, NOT in filename
+
+**Template:**
+```markdown
+---
+type: daily
+created: {{date:YYYY-MM-DD}}
+---
+
+# {{date:dddd, MMMM D, YYYY}}
+
+## Morning
+- **Focus:**
+
+## Log
+-
+
+## Capture
+-
+```
+
+### 6. Seed MOCs: Empty Scaffolds
+
+**Phase 5 MOC approach:**
+- Create 8 empty scaffold MOCs
+- Add Bases/Dataview query views
+- Do NOT generate LLM content yet
+
+**MOC Scaffold Template:**
+```markdown
+---
+type: moc
+created: 2026-01-17
+---
+
+# MOC - {Topic}
+
+## Overview
+{To be filled organically}
+
+## Notes
+```dataview
+LIST
+FROM ""
+WHERE contains(topics, "{topic}")
+SORT file.mtime DESC
+LIMIT 20
+```
+
+## Recent Activity
+```dataview
+TABLE file.mtime as "Modified"
+FROM ""
+WHERE contains(file.path, "{related_folder}")
+SORT file.mtime DESC
+LIMIT 10
+```
+```
+
+---
+
+## Pre-Execution Checklist
+
+Before starting Phase 0:
+
+- [ ] Quarantine approach for make-md confirmed
+- [ ] Privacy gating patterns documented
+- [ ] Daily Notes contract locked (MM-DD-yyyy-EEE)
+- [ ] Stop condition (<0.85 confidence) added
+- [ ] Plugin disable-first strategy confirmed
+- [ ] MOC scaffold approach (empty + queries) confirmed
+

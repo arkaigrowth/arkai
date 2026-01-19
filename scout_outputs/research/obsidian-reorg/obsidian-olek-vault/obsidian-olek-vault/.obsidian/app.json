@@ -1,0 +1,28 @@
+{
+  "vimMode": false,
+  "foldHeading": true,
+  "foldIndent": true,
+  "showLineNumber": false,
+  "tabSize": 2,
+  "readableLineLength": true,
+  "strictLineBreaks": false,
+  "showFrontmatter": true,
+  "defaultViewMode": "source",
+  "livePreview": true,
+  "showInlineTitle": true,
+  "attachmentFolderPath": "Assets",
+  "promptDelete": false,
+  "alwaysUpdateLinks": true,
+  "newFileLocation": "folder",
+  "newFileFolderPath": "00-Inbox",
+  "theme": "obsidian",
+  "cssTheme": "",
+  "baseFontSize": 16,
+  "enabledCssSnippets": ["adhd-friendly"],
+  "hotkeys": {
+    "daily-notes": [{"modifiers": ["Mod"], "key": "D"}],
+    "switcher:open": [{"modifiers": ["Mod"], "key": "O"}],
+    "app:go-back": [{"modifiers": ["Mod"], "key": "["}],
+    "app:go-forward": [{"modifiers": ["Mod"], "key": "]"}]
+  }
+}

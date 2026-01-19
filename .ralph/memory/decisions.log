@@ -1,0 +1,26 @@
+# Decisions Log
+
+> Append-only log of significant decisions across sessions.
+> Format: [DATE] [SESSION] DECISION: ... | RATIONALE: ...
+
+---
+
+[2026-01-18] [init] DECISION: RALPH loop as standalone Python script | RATIONALE: Faster iteration than Rust, matches common external session memory patterns, can integrate with arkai later if needed
+
+[2026-01-18] [init] DECISION: File-based persistence (.ralph/ folder) | RATIONALE: Simple, portable, grep-able, no database dependencies, works with any editor
+
+[2026-01-18] [init] DECISION: Distillation produces 5 artifacts | RATIONALE: summary.md (narrative), decisions.md (choices), open_questions.md (blockers), next_prompt.md (bootstrap), retrieval_index.json (search)
+
+[2026-01-18] [init] DECISION: Bootstrap prompt includes retrieval protocol | RATIONALE: Forces model to read context before acting, prevents hallucinated continuity
+
+[2026-01-18] [init] DECISION: Constraints.md as psychological safety rail | RATIONALE: Prevents repeating mistakes, establishes hard rules that persist across sessions
+
+---
+
+[2026-01-18] [obsidian-reorg] DECISION: Isolated .ralph/ for vault-sandbox | RATIONALE: Vault is a sub-project with own lifecycle, may eventually separate from arkai; keeps vault-specific sessions separate from arkai core sessions
+
+[2026-01-18] [obsidian-reorg] DECISION: Daily note template with Tasks/Notes/Log sections | RATIONALE: ADHD-friendly consistent structure reduces decision fatigue, matches established patterns
+
+[2026-01-18] [obsidian-reorg] DECISION: Enable auto-note-mover + calendar before make-md quarantine | RATIONALE: Establish alternative navigation/org before removing make-md dependencies
+
+[2026-01-18] [obsidian-reorg] DECISION: Privacy zone 99-Private/ excluded from git and AI | RATIONALE: User needs safe space for sensitive notes without audit trail

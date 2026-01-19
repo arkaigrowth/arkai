@@ -1,0 +1,9 @@
+{
+  "session_id": "9e4fca9a",
+  "type": "ask",
+  "question": "Evaluate this scoring rubric for note-taking systems. The proposed criteria are:\n\n1. Capture friction (0-10) - can you land in today's note instantly?\n2. Retrieval power (0-10) - keyword + semantic search\n3. Surfacing (0-10) - tasks, snoozes, time-bound resurfacing\n4. Modularity/permissions (0-10) - AI can touch some folders, not all\n5. Maintainability (0-10) - upgrades don't break you\n6. Mobile capture (0-10) - voice \u2192 text \u2192 filed\n\nQuestions:\n1. Are these the right criteria? What's missing?\n2. How should the weights be distributed? (Should any be weighted higher?)\n3. What scoring methodology would be most robust?",
+  "context": "Context: ADHD-optimized Obsidian vault reorganization project. User prioritizes 'findability over perfection', uses PARA-lite folder structure, wants AI integration via arkai system. Has .aiexclude for privacy-gating sensitive content. Philosophy: 'A messy collection of searchable notes beats a perfect system with nothing in it.'",
+  "depth": "deep",
+  "interactive": false,
+  "created_at": "2026-01-18T23:28:04.617110"
+}

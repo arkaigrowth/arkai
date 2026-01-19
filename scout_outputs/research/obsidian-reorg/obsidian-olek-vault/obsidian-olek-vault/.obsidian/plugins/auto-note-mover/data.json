@@ -1,0 +1,36 @@
+{
+  "trigger_auto_manual": "Automatic",
+  "use_regex_to_check_for_tags": false,
+  "statusBar_trigger_indicator": true,
+  "folder_tag_pattern": [
+    {
+      "folder": "02-Work/Catsy/Meetings",
+      "tag": "#meeting/catsy",
+      "pattern": ""
+    },
+    {
+      "folder": "02-Work/Arkai/Meetings",
+      "tag": "#meeting/arkai",
+      "pattern": ""
+    },
+    {
+      "folder": "03-Projects",
+      "tag": "#project",
+      "pattern": ""
+    },
+    {
+      "folder": "04-Reference",
+      "tag": "#reference",
+      "pattern": ""
+    },
+    {
+      "folder": "05-Archive",
+      "tag": "#archive",
+      "pattern": ""
+    }
+  ],
+  "excluded_folders": [
+    "Templates",
+    ".obsidian"
+  ]
+}
