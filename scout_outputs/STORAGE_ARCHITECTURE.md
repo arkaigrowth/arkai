@@ -1,192 +1,129 @@
-# Storage Architecture: Eliminating the Spaghetti
+# Storage Architecture: RESOLVED ✅
 
-## Current State (The Problem)
-
-You have content scattered across:
-
-```
-~/.arkai/                              # arkai's hidden home
-├── catalog.json                       # Index
-├── library/                           # Some content here
-└── runs/                              # Event logs
-
-~/.config/fabric/                      # fabric's config
-├── .env                               # LLM settings
-├── patterns/                          # 240+ patterns
-└── sessions/                          # fabric sessions?
-
-/Users/alexkamysz/AI/fabric-arkai/     # Your visible fork
-├── library/                           # MORE content here!
-│   ├── youtube/
-│   ├── podcasts/
-│   └── articles/
-└── custom-patterns/
-```
-
-**This IS spaghetti.** You're right to flag it.
+> **Updated**: 2026-01-17 | **Status**: Implemented and consolidated
 
 ---
 
-## The Questions You're Asking
-
-### 1. "Should it be in a visible spot?"
-
-**YES.** Hidden folders are bad for:
-- Discoverability (you forget what's there)
-- Git tracking (can't easily version your knowledge base)
-- Portability (copying ~/.arkai is awkward)
-
-**RECOMMENDATION:** Use a visible, dedicated directory like:
-```
-~/AI/knowledge-base/    # Or wherever you prefer
-├── library/            # Your content (git-trackable)
-├── .arkai/             # arkai metadata (gitignored)
-└── pipelines/          # Your custom workflows
-```
-
-### 2. "Should we save to database instead of files?"
-
-**IT DEPENDS on what you're optimizing for:**
-
-| Storage | Pros | Cons |
-|---------|------|------|
-| **Files (current)** | Human-readable, git-trackable, grep-able, portable | No semantic search, no relationships |
-| **SQLite + files** | Fast queries + human-readable | Extra complexity |
-| **Vector DB only** | Semantic search | Opaque, not human-readable |
-| **Files + Vector DB** | Best of both | Duplicated storage |
-
-**MY RECOMMENDATION:** Files as source of truth + optional vector index
+## Current State (Clean!)
 
 ```
-library/
-├── youtube/video-abc/
-│   ├── metadata.json     # Human-readable
-│   ├── transcript.md     # Human-readable
-│   └── wisdom.md         # Human-readable
+~/AI/
+├── library/                    # CANONICAL content storage
+│   ├── youtube/                # 5 videos
+│   ├── web/
+│   └── other/
+│
+├── arkai/                      # The Rust tool (code)
+│   └── .arkai/config.yaml      # Points to ~/AI/library/
+│
+└── fabric-arkai/               # Fabric configs/scripts
+    └── scripts/playlist-sync.fish
 
-.arkai/
-├── catalog.json          # Quick lookup index
-├── vectors.lance         # Optional: LanceDB for semantic search
-└── runs/                 # Event logs
+~/.arkai/                       # Engine state (derived)
+├── catalog.json                # 5 YouTube entries
+├── processed_videos.txt        # 5 tracked IDs
+└── runs/                       # Event logs
 ```
 
-### 3. "Do we need both vector DB and regular DB?"
-
-**SHORT ANSWER:** No, not necessarily.
-
-| Search Type | What You Need |
-|-------------|---------------|
-| Keyword ("find files with 'pricing'") | Just grep/catalog.json |
-| Semantic ("what did he say about pricing?") | Vector DB |
-| Relationships ("videos that cite each other") | Graph DB (Neo4j) |
-
-**FOR MVP:** Keyword search is enough. Add vectors later.
-
-### 4. "What about RAGFlow or Jan Desktop?"
-
-These are **UIs on top of storage**, not storage systems themselves:
-
-| Tool | What It Is | Storage |
-|------|------------|---------|
-| RAGFlow | RAG pipeline with web UI | Uses its own Milvus/ES |
-| Jan Desktop | Local LLM chat interface | Uses its own format |
-| arkai | CLI orchestrator | Files + optional vector |
-
-**Integration options:**
-- arkai stores content → RAGFlow indexes it for Q&A
-- arkai stores content → Jan can read markdown files
-- Keep arkai as the SOURCE OF TRUTH, other tools as VIEWERS
+**Everything synced:** 5 library folders = 5 catalog entries = 5 tracked IDs ✓
 
 ---
 
-## Proposed Clean Architecture
+## The Problem (Historical)
 
-```
-/Users/alexkamysz/AI/knowledge-base/   # YOUR KNOWLEDGE BASE (visible, portable)
-│
-├── library/                           # Content (git-trackable)
-│   ├── youtube/
-│   │   └── <video-id>/
-│   │       ├── metadata.json
-│   │       ├── transcript.md
-│   │       └── wisdom.md
-│   ├── podcasts/
-│   ├── articles/
-│   └── research/
-│
-├── pipelines/                         # Custom workflows
-│   └── podcast-wisdom.yaml
-│
-├── .arkai/                            # Metadata (gitignored)
-│   ├── catalog.json                   # Quick index
-│   ├── vectors.lance                  # Optional: semantic search
-│   └── runs/                          # Event logs
-│       └── <run-id>/events.jsonl
-│
-└── .gitignore                         # Ignore .arkai/, keep library/
-```
+Previously had content scattered across:
+- `~/.arkai/library/` (arkai default)
+- `~/AI/fabric-arkai/library/` (documented location)
+- `~/AI/library/` (partial)
 
-**Key principles:**
-1. **library/** is human-readable, git-trackable, portable
-2. **.arkai/** is derived/computed data (can be regenerated)
-3. One location, no spaghetti
-4. Vector index is OPTIONAL, built from files
+Plus orphaned catalog entries and tracking file mismatches.
 
 ---
 
-## Migration Path
+## The Solution (Implemented)
 
-### Step 1: Consolidate
-```bash
-# Set arkai to use your preferred location
-export ARKAI_HOME=/Users/alexkamysz/AI/knowledge-base
+### 1. Canonical Location: `~/AI/library/`
 
-# Or create config
-cat > /Users/alexkamysz/AI/knowledge-base/.arkai/config.yaml << 'EOF'
+**Why this location:**
+- **Visible** — not hidden in dotfiles
+- **Tool-agnostic** — not tied to arkai or fabric-arkai repos
+- **Clean architecture** — separates CODE from DATA
+- **Easy to backup** — one folder for all AI content
+
+### 2. Configuration
+
+**arkai config** (`~/AI/arkai/.arkai/config.yaml`):
+```yaml
+version: "1.0"
+
 paths:
-  library: ./library
-  runs: ./.arkai/runs
-EOF
+  library: ../library  # Relative to project root → ~/AI/library/
+
+  content_types:
+    youtube: youtube
+    web: web
+    other: other
 ```
 
-### Step 2: Move existing content
-```bash
-# From fabric-arkai/library to knowledge-base/library
-mv /Users/alexkamysz/AI/fabric-arkai/library/* \
-   /Users/alexkamysz/AI/knowledge-base/library/
+**playlist-sync.fish** updated:
+```fish
+set -g WISDOM_DIR ~/AI/library/youtube
 ```
 
-### Step 3: Rebuild catalog
-```bash
-arkai reindex  # Future command to rebuild catalog from files
-```
+### 3. arkai.md Skill Documentation
+
+Updated to reflect:
+- Library: `~/AI/library/youtube/Title (video_id)/`
+- Artifacts: `fetch.md`, `wisdom.md`, `summary.md`, `metadata.json`
 
 ---
 
-## The 25K Token Limit (Side Note)
+## Storage Principles
 
-That error:
-```
-File content (27877 tokens) exceeds maximum allowed tokens (25000)
-```
-
-This is Claude Code's **Read tool limit** — prevents loading huge files into context. Solutions:
-- Use `offset` and `limit` parameters for partial reads
-- Use `Grep` to search within large files
-- Use `head`/`tail` via Bash for quick peeks
-
-Not a bug, just a safeguard.
+| Principle | Implementation |
+|-----------|----------------|
+| **Files as source of truth** | Human-readable, git-trackable, portable |
+| **Derived data in ~/.arkai/** | Catalog, indexes — can regenerate |
+| **Single canonical location** | All content in `~/AI/library/` |
+| **Human-readable folder names** | `Video Title (video_id)/` format |
 
 ---
 
-## Summary: What We Should Do
+## Transcript Format
 
-| Decision | Recommendation |
-|----------|----------------|
-| Hidden vs visible | **Visible** — use dedicated directory |
-| Files vs DB | **Files as source** — human-readable, portable |
-| Vector DB | **Optional layer** — add later for semantic search |
-| Multiple locations | **Consolidate** — one knowledge-base directory |
-| RAGFlow/Jan | **Separate viewers** — arkai is source of truth |
+Raw transcripts use timestamp markers from `fabric -y URL --transcript-with-timestamps`:
 
-**Next step:** Configure arkai to use your preferred visible directory (like `/Users/alexkamysz/AI/knowledge-base/`), consolidate existing content there.
+```
+[00:00:02] Hey, what's up? So, I want to ask and
+[00:00:04] answer a question that I think is really
+[00:00:06] crucial right now regarding AI...
+```
+
+**Format**: `[HH:MM:SS] transcript text`
+
+---
+
+## Future Considerations
+
+### Vector DB (Optional Layer)
+- Add semantic search via LanceDB or similar
+- Index from files, not replace them
+- Store in `~/.arkai/vectors.lance`
+
+### Graph DB (Future)
+- Relationship queries, cross-content connections
+- Entity linking across library
+- Separate from primary storage
+
+---
+
+## Migration Checklist (Completed)
+
+- [x] Consolidated 3 locations → `~/AI/library/`
+- [x] Created `~/AI/arkai/.arkai/config.yaml`
+- [x] Updated `playlist-sync.fish` WISDOM_DIR
+- [x] Fixed catalog (removed orphans, added missing)
+- [x] Synced tracking file with actual library
+- [x] Updated AIOS_BRIEF.md paths
+- [x] Updated arkai.md skill documentation
+- [x] Cleaned up old empty directories

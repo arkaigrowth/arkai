@@ -96,31 +96,36 @@ Indexes (.arkai/)        →  Derived, regenerable, optional
 ### Canonical Library Location
 
 ```
-~/AI/fabric-arkai/library/      # PRIMARY content storage (visible, git-trackable)
+~/AI/library/                   # PRIMARY content storage (visible, git-trackable)
 ~/.arkai/                       # DERIVED data (catalog, runs, indexes)
+~/AI/arkai/.arkai/config.yaml   # Project-level config (points to ~/AI/library/)
 ```
 
 ### Directory Structure
 
 ```
-~/AI/fabric-arkai/
-├── library/                    # SOURCE OF TRUTH (git-track)
+~/AI/
+├── library/                    # SOURCE OF TRUTH (canonical, git-trackable)
 │   ├── youtube/
 │   │   └── Video Title (XvGeXQ7js_o)/   # Human-readable + source ID
 │   │       ├── metadata.json   # URL, title, tags, timestamps
-│   │       ├── fetch.md        # Raw transcript
-│   │       └── wisdom.md       # AI-extracted insights
-│   ├── articles/
-│   └── podcasts/
+│   │       ├── fetch.md        # Raw transcript with [HH:MM:SS] markers
+│   │       ├── wisdom.md       # AI-extracted insights
+│   │       └── summary.md      # Condensed summary
+│   ├── web/
+│   └── other/
 │
-├── custom-patterns/            # Your fabric patterns
-│   └── my_pattern/system.md
+├── arkai/                      # The Rust tool (code)
+│   ├── .arkai/config.yaml      # Points library to ~/AI/library/
+│   └── src/...
 │
-└── scripts/                    # Automation tools
+└── fabric-arkai/               # Fabric configs/scripts
+    ├── scripts/playlist-sync.fish
+    └── custom-patterns/
 
-~/.arkai/                       # DERIVED DATA (can regenerate)
-├── config.yaml                 # Global config
+~/.arkai/                       # ENGINE STATE (derived, regenerable)
 ├── catalog.json                # Quick lookup index
+├── processed_videos.txt        # Tracking for playlist-sync
 ├── vectors.lance               # Future: semantic search
 └── runs/                       # Event logs
     └── <run-id>/events.jsonl
@@ -671,10 +676,114 @@ arkai reindex
 
 ---
 
+## RLM Integration (Recursive Language Model)
+
+> RLM = Context expansion capability for massive file/repo analysis without context window limits.
+> **Rule**: RLM is a skill/sidecar, NOT an embedded LLM layer. arkai does NOT make LLM calls directly.
+
+### Architectural Placement
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ Claude Code (Natural Language Layer)                             │
+│ • Calls RLM MCP tools: rlm_load, rlm_find, rlm_exec, rlm_subquery│
+│ • Produces findings + evidence_candidates.jsonl                  │
+│ • Stores scratch in ~/.claude/rlm/sessions/                      │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │ (publish to library)
+┌──────────────────────────────▼──────────────────────────────────┐
+│ arkai (Rust Spine) - DOES NOT CALL LLMs                          │
+│ • Invokes RLM as: arkai tool rlm --json-input '...'              │
+│ • Validates evidence_candidates → evidence.jsonl                 │
+│ • Places artifacts in library/<type>/<id>/rlm/                   │
+│ • Emits events to ~/.arkai/runs/<run_id>/events.jsonl            │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### RLM Tool Surface (MCP)
+
+| Tool | Purpose | Type |
+|------|---------|------|
+| `rlm_load_context` | Load content as external variable | Deterministic |
+| `rlm_filter_context` | Regex-based filtering | Deterministic |
+| `rlm_get_chunk` | Retrieve specific chunk/span | Deterministic |
+| `rlm_exec` | Sandboxed Python execution | Requires HITL approval |
+| `rlm_sub_query` | LLM call on chunk | Budgeted, model-routed |
+| `rlm_sub_query_batch` | Parallel LLM calls | Budgeted, model-routed |
+
+### Model Routing (Two-Lane Pattern)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ TIER 1: Best Available (Claude in-session)                       │
+│ • Used for: Root queries, final synthesis                        │
+│ • Cost: Subscription or API                                      │
+├─────────────────────────────────────────────────────────────────┤
+│ TIER 2: OpenRouter (explicit paid)                               │
+│ • Models: gpt-4o-mini, gemini-flash, glm-4.7                    │
+│ • Used for: Batch chunk processing, parallel sub-queries        │
+│ • API: openai.OpenAI(base_url="https://openrouter.ai/api/v1")  │
+├─────────────────────────────────────────────────────────────────┤
+│ TIER 3: Ollama (explicit free)                                   │
+│ • Models: gemma3:12b, qwen2.5:14b                                │
+│ • Used for: Offline mode, cost-sensitive batch processing        │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Budget Controls (MVP)
+
+```yaml
+rlm:
+  budgets:
+    max_subquery_calls: 50    # Per-run hard limit
+    max_tokens: 100000        # Per-run token limit
+    max_dollars: 1.00         # Per-run spend limit
+    warning_threshold: 0.80   # 80% triggers HITL approval
+```
+
+### Evidence Integration
+
+RLM outputs `evidence_candidates.jsonl` with provenance-ready spans:
+
+```json
+{
+  "id": "rlm-abc123",
+  "claim": "API endpoint lacks authentication",
+  "quote": "router.get('/admin', handler)",
+  "artifact_sha256": "sha256:...",
+  "span_type": {
+    "line_range": [42, 42],
+    "byte_range": [1234, 1290]
+  },
+  "chunk_strategy": "lines:100@v1",
+  "chunk_id": "a3f8b2c1d9e4f567",
+  "confidence": 0.85,
+  "verification_status": "unverified",
+  "source_kind": "repo"
+}
+```
+
+### Storage Layout
+
+```
+~/.claude/rlm/sessions/<session_id>/    # Scratch (Claude Code)
+├── chunks/
+├── findings.json
+└── evidence_candidates.jsonl
+
+~/AI/library/<type>/<id>/rlm/           # Canonical (arkai)
+├── analysis.md
+├── findings.json
+└── evidence_candidates.jsonl           # → arkai validates → evidence.jsonl
+```
+
+---
+
 ## Quick Reference
 
 **arkai**: Rust spine, orchestration, state, storage
 **fabric**: Go patterns, AI transformations, stateless
+**RLM**: Skill/sidecar for massive context analysis (NOT embedded LLM layer)
 **library/**: Source of truth, git-trackable content
 **.arkai/**: Derived data, indexes, event logs
 **Content ID**: SHA256(url)[0:16]
