@@ -1,0 +1,450 @@
+#!/usr/bin/env python3
+"""
+RALPH - Retrieval-Augmented Loop for Persistent History
+
+External session memory for Claude Code. Wraps the claude CLI to provide
+durable memory across sessions via file-based artifacts.
+
+Usage:
+    ralph run "task description"     # Start a new session
+    ralph close                      # End session, run distillation
+    ralph resume                     # Resume from last session's next_prompt
+    ralph status                     # Show current session status
+    ralph history [n]                # Show last n sessions
+
+Architecture:
+    - Sessions are stored in .ralph/runs/<timestamp>/
+    - Memory persists in .ralph/memory/
+    - Templates define prompts in .ralph/templates/
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+# Configuration
+RALPH_DIR = Path(".ralph")
+RUNS_DIR = RALPH_DIR / "runs"
+MEMORY_DIR = RALPH_DIR / "memory"
+TEMPLATES_DIR = RALPH_DIR / "templates"
+
+# Current session tracking
+SESSION_FILE = RALPH_DIR / ".current_session"
+
+
+def get_timestamp() -> str:
+    """Generate ISO 8601 timestamp for session IDs."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
+
+
+def get_current_session() -> Optional[str]:
+    """Get the current active session ID, if any."""
+    if SESSION_FILE.exists():
+        return SESSION_FILE.read_text().strip()
+    return None
+
+
+def set_current_session(session_id: str) -> None:
+    """Set the current active session."""
+    SESSION_FILE.write_text(session_id)
+
+
+def clear_current_session() -> None:
+    """Clear the current session marker."""
+    if SESSION_FILE.exists():
+        SESSION_FILE.unlink()
+
+
+def get_previous_session() -> Optional[str]:
+    """Get the most recent completed session."""
+    if not RUNS_DIR.exists():
+        return None
+    sessions = sorted(RUNS_DIR.iterdir(), reverse=True)
+    current = get_current_session()
+    for s in sessions:
+        if s.name != current:
+            return s.name
+    return None
+
+
+def load_template(name: str) -> str:
+    """Load a template file."""
+    template_path = TEMPLATES_DIR / f"{name}.md"
+    if not template_path.exists():
+        print(f"Error: Template not found: {template_path}", file=sys.stderr)
+        sys.exit(1)
+    return template_path.read_text()
+
+
+def load_memory_file(name: str) -> str:
+    """Load a memory file, returning empty string if not found."""
+    memory_path = MEMORY_DIR / name
+    if memory_path.exists():
+        return memory_path.read_text()
+    return ""
+
+
+def render_bootstrap(mission: str, session_id: str) -> str:
+    """Render the bootstrap template with current context."""
+    template = load_template("bootstrap")
+
+    # Load memory
+    constraints = load_memory_file("constraints.md")
+    rolling_summary = load_memory_file("rolling_summary.md")
+
+    # Get recent decisions (last 20 lines)
+    decisions_log = load_memory_file("decisions.log")
+    recent_decisions = "\n".join(decisions_log.strip().split("\n")[-20:])
+
+    # Get previous session
+    previous_session = get_previous_session() or "none"
+
+    # Replace placeholders
+    rendered = template.replace("{{SESSION_ID}}", session_id)
+    rendered = rendered.replace("{{TIMESTAMP}}", datetime.now(timezone.utc).isoformat())
+    rendered = rendered.replace("{{MISSION}}", mission)
+    rendered = rendered.replace("{{PREVIOUS_SESSION}}", previous_session)
+    rendered = rendered.replace("{{CONSTRAINTS}}", constraints)
+    rendered = rendered.replace("{{ROLLING_SUMMARY}}", rolling_summary)
+    rendered = rendered.replace("{{RECENT_DECISIONS}}", recent_decisions)
+
+    return rendered
+
+
+def cmd_run(args: argparse.Namespace) -> None:
+    """Start a new RALPH session."""
+    # Check for existing session
+    current = get_current_session()
+    if current:
+        print(f"Warning: Session {current} is still active.", file=sys.stderr)
+        print("Run 'ralph close' first, or 'ralph run --force' to override.", file=sys.stderr)
+        if not args.force:
+            sys.exit(1)
+
+    # Create session
+    session_id = get_timestamp()
+    session_dir = RUNS_DIR / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+    (session_dir / "outputs").mkdir(exist_ok=True)
+    (session_dir / "distill").mkdir(exist_ok=True)
+
+    # Track session
+    set_current_session(session_id)
+
+    # Render bootstrap
+    mission = args.mission
+    bootstrap = render_bootstrap(mission, session_id)
+
+    # Save bootstrap to session
+    (session_dir / "bootstrap.md").write_text(bootstrap)
+
+    # Save mission
+    (session_dir / "mission.txt").write_text(mission)
+
+    print(f"Session started: {session_id}")
+    print(f"Directory: {session_dir}")
+
+    # Auto-launch Claude if requested
+    if args.auto:
+        print(f"Launching Claude Code with bootstrap...")
+        print()
+
+        # Use script to capture transcript
+        transcript_path = session_dir / "transcript.txt"
+
+        # Launch claude with bootstrap as appended system prompt
+        try:
+            # Build the claude command
+            claude_cmd = [
+                "claude",
+                "--append-system-prompt", bootstrap,
+            ]
+
+            # Use script to capture the session
+            full_cmd = [
+                "script", "-q", str(transcript_path),
+            ] + claude_cmd
+
+            print(f"Transcript will be saved to: {transcript_path}")
+            print("=" * 60)
+            print()
+
+            # Run interactively
+            subprocess.run(full_cmd, cwd=os.getcwd())
+
+            print()
+            print("=" * 60)
+            print(f"Session ended. Transcript saved to: {transcript_path}")
+            print("Run 'ralph close' to finalize.")
+
+        except FileNotFoundError:
+            print("Error: 'claude' or 'script' command not found.", file=sys.stderr)
+            print("Falling back to manual mode.", file=sys.stderr)
+            args.auto = False
+
+    if not args.auto:
+        print()
+        print("=" * 60)
+        print("BOOTSTRAP PROMPT (copy this into Claude Code):")
+        print("=" * 60)
+        print()
+        print(bootstrap)
+        print()
+        print("=" * 60)
+        print()
+        print("When done, run: ralph close")
+        print()
+        print("TIP: Use 'ralph run --auto' to auto-launch Claude with bootstrap!")
+
+
+def cmd_close(args: argparse.Namespace) -> None:
+    """Close the current session and run distillation."""
+    current = get_current_session()
+    if not current:
+        print("Error: No active session. Run 'ralph run' first.", file=sys.stderr)
+        sys.exit(1)
+
+    session_dir = RUNS_DIR / current
+    distill_dir = session_dir / "distill"
+
+    print(f"Closing session: {current}")
+
+    # Capture git diff
+    try:
+        diff = subprocess.run(
+            ["git", "diff", "HEAD"],
+            capture_output=True,
+            text=True,
+            cwd="."
+        )
+        (session_dir / "repo_diff.patch").write_text(diff.stdout)
+        print("  - Saved repo diff")
+    except Exception as e:
+        print(f"  - Warning: Could not capture git diff: {e}", file=sys.stderr)
+
+    # Capture git status
+    try:
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            cwd="."
+        )
+        (session_dir / "git_status.txt").write_text(status.stdout)
+        print("  - Saved git status")
+    except Exception as e:
+        print(f"  - Warning: Could not capture git status: {e}", file=sys.stderr)
+
+    print()
+    print("=" * 60)
+    print("DISTILLATION REQUIRED")
+    print("=" * 60)
+    print()
+    print("Please run the distillation prompt on your session transcript.")
+    print(f"Template: {TEMPLATES_DIR / 'distill_prompt.md'}")
+    print()
+    print("Save the outputs to:")
+    print(f"  - {distill_dir / 'summary.md'}")
+    print(f"  - {distill_dir / 'decisions.md'}")
+    print(f"  - {distill_dir / 'open_questions.md'}")
+    print(f"  - {distill_dir / 'next_prompt.md'}")
+    print(f"  - {distill_dir / 'retrieval_index.json'}")
+    print()
+    print("After distillation, run: ralph finalize")
+
+    # Mark session as pending distillation
+    (session_dir / ".pending_distill").touch()
+
+
+def cmd_finalize(args: argparse.Namespace) -> None:
+    """Finalize session after distillation is complete."""
+    current = get_current_session()
+    if not current:
+        print("Error: No active session.", file=sys.stderr)
+        sys.exit(1)
+
+    session_dir = RUNS_DIR / current
+    distill_dir = session_dir / "distill"
+
+    # Check for required files
+    required = ["summary.md", "decisions.md", "open_questions.md", "next_prompt.md"]
+    missing = [f for f in required if not (distill_dir / f).exists()]
+
+    if missing:
+        print(f"Error: Missing distillation artifacts: {missing}", file=sys.stderr)
+        print("Run distillation first, then 'ralph finalize'.", file=sys.stderr)
+        sys.exit(1)
+
+    # Update rolling summary
+    summary = (distill_dir / "summary.md").read_text()
+    decisions = (distill_dir / "decisions.md").read_text()
+
+    # Append to decisions log
+    decisions_log_path = MEMORY_DIR / "decisions.log"
+    with open(decisions_log_path, "a") as f:
+        f.write(f"\n# Session: {current}\n")
+        # Extract decision lines and format them
+        for line in decisions.split("\n"):
+            if line.strip().startswith("**Choice**:"):
+                choice = line.replace("**Choice**:", "").strip()
+                f.write(f"[{current[:10]}] [{current}] DECISION: {choice}\n")
+
+    # Remove pending marker
+    pending_marker = session_dir / ".pending_distill"
+    if pending_marker.exists():
+        pending_marker.unlink()
+
+    # Clear current session
+    clear_current_session()
+
+    print(f"Session finalized: {current}")
+    print(f"  - Updated decisions log")
+    print(f"  - Session archived")
+    print()
+    print("To start next session, run: ralph resume")
+
+
+def cmd_resume(args: argparse.Namespace) -> None:
+    """Resume from the previous session's next_prompt."""
+    previous = get_previous_session()
+    if not previous:
+        print("Error: No previous session found.", file=sys.stderr)
+        sys.exit(1)
+
+    next_prompt_path = RUNS_DIR / previous / "distill" / "next_prompt.md"
+    if not next_prompt_path.exists():
+        print(f"Error: No next_prompt.md found for session {previous}", file=sys.stderr)
+        sys.exit(1)
+
+    next_prompt = next_prompt_path.read_text()
+
+    # Start new session with the next prompt as mission
+    session_id = get_timestamp()
+    session_dir = RUNS_DIR / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+    (session_dir / "outputs").mkdir(exist_ok=True)
+    (session_dir / "distill").mkdir(exist_ok=True)
+
+    set_current_session(session_id)
+
+    # Save reference to previous session
+    (session_dir / "continued_from.txt").write_text(previous)
+
+    print(f"Resuming from session: {previous}")
+    print(f"New session: {session_id}")
+    print()
+    print("=" * 60)
+    print("NEXT PROMPT (copy this into Claude Code):")
+    print("=" * 60)
+    print()
+    print(next_prompt)
+    print()
+    print("=" * 60)
+
+
+def cmd_status(args: argparse.Namespace) -> None:
+    """Show current session status."""
+    current = get_current_session()
+
+    print("RALPH Status")
+    print("=" * 40)
+
+    if current:
+        session_dir = RUNS_DIR / current
+        print(f"Active session: {current}")
+        print(f"Directory: {session_dir}")
+
+        if (session_dir / ".pending_distill").exists():
+            print("Status: PENDING DISTILLATION")
+            print("  Run distillation, then 'ralph finalize'")
+        else:
+            print("Status: IN PROGRESS")
+            print("  Run 'ralph close' when done")
+    else:
+        print("No active session")
+        previous = get_previous_session()
+        if previous:
+            print(f"Last session: {previous}")
+            print("  Run 'ralph resume' to continue")
+
+    print()
+    print(f"Total sessions: {len(list(RUNS_DIR.iterdir())) if RUNS_DIR.exists() else 0}")
+
+
+def cmd_history(args: argparse.Namespace) -> None:
+    """Show session history."""
+    if not RUNS_DIR.exists():
+        print("No sessions yet.")
+        return
+
+    sessions = sorted(RUNS_DIR.iterdir(), reverse=True)[:args.count]
+
+    print(f"Last {len(sessions)} sessions:")
+    print("=" * 60)
+
+    for session_dir in sessions:
+        session_id = session_dir.name
+        mission_file = session_dir / "mission.txt"
+        mission = mission_file.read_text().strip()[:50] if mission_file.exists() else "(no mission)"
+
+        status = "ACTIVE" if get_current_session() == session_id else ""
+        if (session_dir / ".pending_distill").exists():
+            status = "PENDING"
+
+        print(f"{session_id}  {status:8}  {mission}...")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="RALPH - Retrieval-Augmented Loop for Persistent History",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # run
+    run_parser = subparsers.add_parser("run", help="Start a new session")
+    run_parser.add_argument("mission", help="Mission/task description for this session")
+    run_parser.add_argument("--force", "-f", action="store_true", help="Force start even if session active")
+    run_parser.add_argument("--auto", "-a", action="store_true", help="Auto-launch Claude with bootstrap injected")
+    run_parser.set_defaults(func=cmd_run)
+
+    # close
+    close_parser = subparsers.add_parser("close", help="Close current session")
+    close_parser.set_defaults(func=cmd_close)
+
+    # finalize
+    finalize_parser = subparsers.add_parser("finalize", help="Finalize after distillation")
+    finalize_parser.set_defaults(func=cmd_finalize)
+
+    # resume
+    resume_parser = subparsers.add_parser("resume", help="Resume from previous session")
+    resume_parser.set_defaults(func=cmd_resume)
+
+    # status
+    status_parser = subparsers.add_parser("status", help="Show current status")
+    status_parser.set_defaults(func=cmd_status)
+
+    # history
+    history_parser = subparsers.add_parser("history", help="Show session history")
+    history_parser.add_argument("count", nargs="?", type=int, default=10, help="Number of sessions to show")
+    history_parser.set_defaults(func=cmd_history)
+
+    args = parser.parse_args()
+
+    # Ensure RALPH directory exists
+    if args.command not in ["status", "history"]:
+        if not RALPH_DIR.exists():
+            print(f"Error: RALPH not initialized. Create {RALPH_DIR}/ first.", file=sys.stderr)
+            sys.exit(1)
+
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
