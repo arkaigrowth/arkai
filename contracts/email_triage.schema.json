@@ -1,0 +1,373 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arkai.dev/schemas/email_triage.schema.json",
+  "title": "Email Triage Contract",
+  "description": "Schema for email triage queue items in arkai gmail pipeline. Defines the Reader/Critic/Actor data flow for secure email processing.",
+  "version": "1.0.0",
+
+  "definitions": {
+    "EmailTriageItem": {
+      "type": "object",
+      "description": "A single email awaiting or undergoing triage. Written by ingestion layer, read by Reader LLM, updated by Actor.",
+      "required": ["id", "message_id", "thread_id", "from", "subject", "received_at", "status"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "SHA256(message_id)[0:12] - content-addressable ID for idempotency",
+          "pattern": "^[a-f0-9]{12}$"
+        },
+        "message_id": {
+          "type": "string",
+          "description": "Gmail API message ID (unique within mailbox)"
+        },
+        "thread_id": {
+          "type": "string",
+          "description": "Gmail API thread ID (groups related messages)"
+        },
+        "from": {
+          "type": "string",
+          "description": "Sender email address (e.g., 'Name <email@domain.com>')"
+        },
+        "to": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Recipient email addresses"
+        },
+        "cc": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "CC email addresses",
+          "default": []
+        },
+        "subject": {
+          "type": "string",
+          "description": "Email subject line"
+        },
+        "snippet": {
+          "type": "string",
+          "description": "Gmail snippet (preview text, ~100 chars)"
+        },
+        "received_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp when email was received"
+        },
+        "labels": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Current Gmail label IDs",
+          "default": []
+        },
+        "status": {
+          "$ref": "#/definitions/TriageStatus"
+        },
+        "queued_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When this item was added to the triage queue"
+        },
+        "processed_at": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "When triage processing completed"
+        },
+        "classification": {
+          "oneOf": [
+            { "$ref": "#/definitions/TriageClassification" },
+            { "type": "null" }
+          ],
+          "description": "Reader LLM classification result (null until processed)"
+        },
+        "proposed_actions": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ProposedAction" },
+          "description": "Actions proposed by Reader, validated by Critic",
+          "default": []
+        },
+        "executed_actions": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ExecutedAction" },
+          "description": "Actions executed by Actor (audit trail)",
+          "default": []
+        },
+        "error": {
+          "type": ["string", "null"],
+          "description": "Error message if status is 'failed'"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "TriageStatus": {
+      "type": "string",
+      "enum": ["pending", "classifying", "awaiting_approval", "executing", "done", "failed"],
+      "description": "Triage pipeline status. 'awaiting_approval' means Critic escalated to human."
+    },
+
+    "TriageClassification": {
+      "type": "object",
+      "description": "Structured output from Reader LLM. This is the ONLY output format the Reader can produce.",
+      "required": ["category", "confidence", "summary"],
+      "properties": {
+        "category": {
+          "type": "string",
+          "enum": ["PRIORITY", "NEEDS_REPLY", "FYI", "NEWSLETTER", "RECEIPT", "SPAM_ISH"],
+          "description": "Primary classification category"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Classification confidence (0.0-1.0)"
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "One-line summary of the email (< 200 chars)"
+        },
+        "key_points": {
+          "type": "array",
+          "items": { "type": "string" },
+          "maxItems": 5,
+          "description": "Up to 5 key points extracted from email"
+        },
+        "action_items": {
+          "type": ["array", "null"],
+          "items": { "type": "string" },
+          "maxItems": 3,
+          "description": "Action items mentioned in the email (if any)"
+        },
+        "reasoning": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Brief explanation of classification reasoning"
+        },
+        "suggested_reply": {
+          "oneOf": [
+            { "$ref": "#/definitions/SuggestedReply" },
+            { "type": "null" }
+          ],
+          "description": "Draft reply suggestion (if category is NEEDS_REPLY)"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "SuggestedReply": {
+      "type": "object",
+      "description": "A draft reply suggestion from the Reader. Actor creates as DRAFT only, never sends.",
+      "required": ["tone", "content"],
+      "properties": {
+        "tone": {
+          "type": "string",
+          "enum": ["formal", "casual", "brief"],
+          "description": "Suggested tone for the reply"
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "Draft reply content (< 2000 chars)"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "ProposedAction": {
+      "type": "object",
+      "description": "An action proposed by Reader, to be validated by Critic before execution.",
+      "required": ["action", "reason"],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["add_label", "remove_label", "archive", "mark_read", "create_draft"],
+          "description": "Action type. ONLY these actions are allowed - no send, delete, forward."
+        },
+        "label": {
+          "type": "string",
+          "description": "Label name (for add_label/remove_label actions)"
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Why this action is proposed"
+        },
+        "approved": {
+          "type": ["boolean", "null"],
+          "description": "Critic approval status: true=approved, false=rejected, null=pending"
+        },
+        "approved_by": {
+          "type": ["string", "null"],
+          "enum": ["auto", "critic", "human", null],
+          "description": "Who approved this action"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "ExecutedAction": {
+      "type": "object",
+      "description": "Record of an action executed by Actor (immutable audit trail).",
+      "required": ["action", "executed_at", "success"],
+      "properties": {
+        "action": {
+          "type": "string",
+          "description": "Action that was executed"
+        },
+        "label": {
+          "type": "string",
+          "description": "Label (if applicable)"
+        },
+        "executed_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the action was executed"
+        },
+        "success": {
+          "type": "boolean",
+          "description": "Whether execution succeeded"
+        },
+        "error": {
+          "type": ["string", "null"],
+          "description": "Error message if success=false"
+        },
+        "gmail_response": {
+          "type": ["object", "null"],
+          "description": "Raw Gmail API response (for debugging)"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "EmailEvent": {
+      "type": "object",
+      "description": "Immutable event in the email triage audit log. Append-only JSONL storage.",
+      "required": ["id", "timestamp", "event_type", "email_id"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Unique event ID (UUID v4)"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When this event occurred"
+        },
+        "event_type": {
+          "$ref": "#/definitions/EmailEventType"
+        },
+        "email_id": {
+          "type": "string",
+          "description": "Reference to EmailTriageItem.id"
+        },
+        "actor": {
+          "type": "string",
+          "enum": ["ingestion", "reader", "critic", "actor", "human"],
+          "description": "Which component produced this event"
+        },
+        "data": {
+          "type": "object",
+          "description": "Event-specific payload (varies by event_type)"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "EmailEventType": {
+      "type": "string",
+      "enum": [
+        "email_queued",
+        "classification_started",
+        "classification_completed",
+        "classification_failed",
+        "action_proposed",
+        "action_approved",
+        "action_rejected",
+        "action_escalated",
+        "action_executed",
+        "action_failed",
+        "triage_completed"
+      ],
+      "description": "Types of events in the email triage pipeline"
+    },
+
+    "CriticPolicy": {
+      "type": "object",
+      "description": "Configuration for Critic validation rules. Loaded from config, not from emails.",
+      "properties": {
+        "auto_approve_labels": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Labels that can be auto-approved without human review"
+        },
+        "require_human_approval": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Actions that always require human approval"
+        },
+        "blocked_actions": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Actions that are NEVER allowed (send, delete, forward)"
+        },
+        "confidence_threshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Minimum confidence for auto-approval (default: 0.8)"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+
+  "examples": [
+    {
+      "id": "a1b2c3d4e5f6",
+      "message_id": "18d5a7b3c9e0f123",
+      "thread_id": "18d5a7b3c9e0f100",
+      "from": "boss@company.com",
+      "to": ["me@example.com"],
+      "subject": "Q1 Review - Action Required",
+      "snippet": "Please review the Q1 numbers and send me your analysis by Friday...",
+      "received_at": "2026-01-26T10:30:00Z",
+      "labels": ["INBOX", "UNREAD"],
+      "status": "done",
+      "queued_at": "2026-01-26T10:31:00Z",
+      "processed_at": "2026-01-26T10:31:05Z",
+      "classification": {
+        "category": "PRIORITY",
+        "confidence": 0.95,
+        "summary": "Boss requesting Q1 analysis by Friday",
+        "key_points": ["Q1 review needed", "Deadline: Friday", "Analysis expected"],
+        "action_items": ["Review Q1 numbers", "Send analysis to boss"],
+        "reasoning": "Direct request from manager with clear deadline"
+      },
+      "proposed_actions": [
+        {
+          "action": "add_label",
+          "label": "arkai/Priority",
+          "reason": "High priority from manager",
+          "approved": true,
+          "approved_by": "auto"
+        },
+        {
+          "action": "add_label",
+          "label": "arkai/NeedsReply",
+          "reason": "Response expected",
+          "approved": true,
+          "approved_by": "auto"
+        }
+      ],
+      "executed_actions": [
+        {
+          "action": "add_label",
+          "label": "arkai/Priority",
+          "executed_at": "2026-01-26T10:31:06Z",
+          "success": true
+        }
+      ],
+      "error": null
+    }
+  ]
+}

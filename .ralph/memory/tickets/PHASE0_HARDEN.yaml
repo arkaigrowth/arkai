@@ -4,11 +4,11 @@
 
 id: PHASE0_HARDEN
 worker: triage-sidecar
-status: BLOCKED
+status: REVIEW
 blockedBy: []  # No dependencies - this is the first ticket
 branch: feat/phase0-harden
 created: 2026-01-26T12:00:00Z
-updated: 2026-01-26T12:00:00Z
+updated: 2026-01-26T16:30:00Z
 
 # Files worker MUST read before starting
 context:
@@ -83,12 +83,27 @@ deliverables:
 
 # Worker fills these in when complete
 proofs:
-  groups_clawdbot: ""           # Paste output of: groups clawdbot
-  sudo_l_clawdbot: ""           # Paste output of: sudo -l -U clawdbot
-  id_arkai_exec: ""             # Paste output of: id arkai-exec
-  claudia_test: ""              # Paste Claudia's response to test message
-  iptables_list: ""             # Paste output of: sudo iptables -L OUTPUT --line-numbers
-  schema_validation: ""         # Paste output of schema validation command
+  groups_clawdbot: "clawdbot : clawdbot"  # ✅ No docker group
+  sudo_l_clawdbot: "User clawdbot is not allowed to run sudo on arkai-clawdbot."  # ✅ No sudo
+  id_arkai_exec: "uid=1002(arkai-exec) gid=1002(arkai-exec) groups=1002(arkai-exec)"  # ✅ User exists
+  claudia_test: "PENDING - Requires manual Telegram test by user"  # ⏳ Manual step
+  iptables_list: |
+    Chain OUTPUT (policy ACCEPT)
+    num  target     prot opt source               destination
+    1    ACCEPT     0    --  0.0.0.0/0            0.0.0.0/0            state RELATED,ESTABLISHED
+    2    ACCEPT     0    --  0.0.0.0/0            0.0.0.0/0
+    3    ACCEPT     17   --  0.0.0.0/0            0.0.0.0/0            udp dpt:53
+    4    ACCEPT     6    --  0.0.0.0/0            0.0.0.0/0            tcp dpt:53
+    5    ACCEPT     6    --  0.0.0.0/0            0.0.0.0/0            tcp dpt:443
+    6    ACCEPT     6    --  0.0.0.0/0            0.0.0.0/0            tcp dpt:80
+    7    ACCEPT     6    --  0.0.0.0/0            0.0.0.0/0            tcp dpt:22
+    8    ACCEPT     17   --  0.0.0.0/0            0.0.0.0/0            udp dpt:41641
+    9    LOG        0    --  0.0.0.0/0            0.0.0.0/0            LOG flags 0 level 4 prefix "EGRESS_UNMATCHED: "
+  schema_validation: |
+    definitions keys: ["CriticPolicy","EmailEvent","EmailEventType","EmailTriageItem","ExecutedAction","ProposedAction","SuggestedReply","TriageClassification","TriageStatus"]
+    ✅ EmailTriageItem exists
+    ✅ EmailEvent exists
+    ✅ TriageClassification exists
 
 # Risk assessment
 risk: |
