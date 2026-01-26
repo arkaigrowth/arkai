@@ -86,7 +86,7 @@ proofs:
   groups_clawdbot: "clawdbot : clawdbot"  # ✅ No docker group
   sudo_l_clawdbot: "User clawdbot is not allowed to run sudo on arkai-clawdbot."  # ✅ No sudo
   id_arkai_exec: "uid=1002(arkai-exec) gid=1002(arkai-exec) groups=1002(arkai-exec)"  # ✅ User exists
-  claudia_test: "PENDING - Requires manual Telegram test by user"  # ⏳ Manual step
+  claudia_test: "Copy that! 📡 Message received loud and clear from triage-sidecar relay. All systems nominal on my end."  # ✅ Verified
   iptables_list: |
     Chain OUTPUT (policy ACCEPT)
     num  target     prot opt source               destination
