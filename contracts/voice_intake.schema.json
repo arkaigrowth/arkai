@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arkai.dev/schemas/voice_intake.schema.json",
+  "title": "Voice Intake Queue Item",
+  "description": "Schema for voice memo queue items in arkai voice capture pipeline",
+  "type": "object",
+  "required": ["id", "file_path", "file_name", "detected_at", "status"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "SHA256(file_content)[0:12] - content-addressable ID",
+      "pattern": "^[a-f0-9]{12}$"
+    },
+    "file_path": {
+      "type": "string",
+      "description": "Absolute path to the source audio file"
+    },
+    "file_name": {
+      "type": "string",
+      "description": "Original filename (e.g., '20260125 153042.m4a')"
+    },
+    "file_size": {
+      "type": "integer",
+      "description": "File size in bytes",
+      "minimum": 0
+    },
+    "detected_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when file was detected"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pending", "processing", "done", "failed"],
+      "description": "Current processing status"
+    },
+    "started_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "When processing started"
+    },
+    "completed_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "When processing completed"
+    },
+    "error": {
+      "type": ["string", "null"],
+      "description": "Error message if status is 'failed'"
+    },
+    "retry_count": {
+      "type": "integer",
+      "default": 0,
+      "minimum": 0,
+      "description": "Number of retry attempts"
+    },
+    "transcript_path": {
+      "type": ["string", "null"],
+      "description": "Path to generated transcript file"
+    },
+    "obsidian_path": {
+      "type": ["string", "null"],
+      "description": "Path to deposited Obsidian markdown file"
+    },
+    "route": {
+      "type": "string",
+      "enum": ["telegram", "local_whisper"],
+      "default": "telegram",
+      "description": "Processing route: Claudia (telegram) or local Whisper"
+    },
+    "telegram_message_id": {
+      "type": ["integer", "null"],
+      "description": "Telegram message ID if sent via telegram route"
+    }
+  },
+  "additionalProperties": false
+}
