@@ -134,6 +134,15 @@ impl Run {
                 };
                 self.completed_at = Some(event.timestamp);
             }
+
+            // Voice capture events don't affect Run state
+            EventType::AudioDetected
+            | EventType::VoiceQueued
+            | EventType::VoiceProcessingStarted
+            | EventType::VoiceProcessingCompleted
+            | EventType::VoiceProcessingFailed => {
+                // These are handled by the voice queue, not the run system
+            }
         }
     }
 

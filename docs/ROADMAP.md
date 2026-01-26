@@ -93,7 +93,76 @@
 
 ---
 
-## v2.0: Vector Search + Semantic Layer
+## v1.4: Voice Capture (Siri → arkai → Obsidian)
+
+> Design complete: `docs/ARKAI_VOICE_CAPTURE_DESIGN.md`
+
+### Phase 1: Foundation (Delegate to arkai-voice-builder)
+- [ ] Watcher (notify crate) for Voice Memos directory
+- [ ] Queue manager (JSONL, matches EventStore pattern)
+- [ ] CLI: `arkai ingest voice status`
+
+### Phase 2: Transcription
+- [ ] Whisper backend (already installed at /opt/homebrew/bin/whisper)
+- [ ] TranscriptionBackend trait + pluggable backends
+- [ ] Apple Native backend stub (future fast mode)
+
+### Phase 3: Deposit
+- [ ] Obsidian depositor (markdown generation)
+- [ ] Atomic file writes (temp → rename)
+- [ ] CLI: `arkai ingest voice watch --once`
+
+### Phase 4: Enrichment (Tier 1)
+- [ ] LLM sidecar for summary/tasks extraction
+- [ ] Evidence-required task validation
+- [ ] Security gate (path validation, limits)
+
+---
+
+## v1.5: Gmail Triage (Separate Repo)
+
+> Design complete: `docs/ARKAI_GMAIL_DESIGN.md`
+> Repo: `arkai-gmail` (Python, not in arkai core)
+
+- [ ] OAuth setup + Gmail API integration
+- [ ] 7-layer security architecture (Reader/Critic/Executor)
+- [ ] Label taxonomy (arkai/Priority, arkai/FYI, etc.)
+- [ ] Audit log (EventStore pattern in Python)
+
+---
+
+## v1.6: Spec Kernel (Chad's Work)
+
+> Reference: `arkai-spec-bootstrap-v3.zip`
+
+- [ ] Merge spec/ folder structure
+- [ ] PR-1: Add schema_version to Rust Event struct
+- [ ] Align EventType/StepStatus enums with spec
+
+---
+
+## v2.0: Clawdbot Integration
+
+> Clawdbot = user-facing chat agent. arkai = backend spine.
+
+### Fit Matrix
+
+| Layer | Clawdbot | arkai |
+|-------|----------|-------|
+| Interface | WhatsApp/Telegram/iMessage | CLI/API |
+| Memory | Persistent preferences | Event-sourced audit log |
+| Execution | Direct actions | Pipeline orchestration |
+| Safety | Sandboxed permissions | Reader/Critic/Executor separation |
+
+### Integration Path
+- [ ] Clawdbot triggers arkai pipelines via CLI
+- [ ] arkai provides safety rails + audit trail
+- [ ] Shared Obsidian vault as knowledge base
+- [ ] Voice capture → clawdbot notifications
+
+---
+
+## v3.0: Vector Search + Semantic Layer
 
 - [ ] LanceDB integration for semantic search
 - [ ] Cross-content entity linking

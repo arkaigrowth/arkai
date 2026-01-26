@@ -16,6 +16,7 @@ use crate::core::{Orchestrator, Pipeline};
 use crate::library::{Catalog, CatalogItem, ContentType, LibraryContent};
 
 pub mod evidence;
+pub mod voice;
 
 /// arkai - Event-sourced AI pipeline orchestrator
 #[derive(Parser, Debug)]
@@ -145,6 +146,12 @@ pub enum Commands {
         #[command(subcommand)]
         command: evidence::EvidenceCommands,
     },
+
+    /// Voice memo capture and processing
+    Voice {
+        #[command(subcommand)]
+        command: voice::VoiceCommands,
+    },
 }
 
 /// Content type for CLI (maps to ContentType)
@@ -222,6 +229,9 @@ impl Cli {
             }
             Commands::Evidence { command } => {
                 execute_evidence(command).await
+            }
+            Commands::Voice { command } => {
+                voice::execute(command).await
             }
         }
     }

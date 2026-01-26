@@ -11,5 +11,5 @@ pub mod run;
 
 // Re-export commonly used types
 pub use artifact::{Artifact, ArtifactType};
-pub use events::{Event, EventType, StepStatus};
+pub use events::{Event, EventType, StepStatus, VoiceQueueStatus};
 pub use run::{Run, RunState};

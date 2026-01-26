@@ -107,6 +107,25 @@ pub enum EventType {
 
     /// A safety limit was reached, halting execution
     SafetyLimitReached,
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Voice Capture Events (Phase 1)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Audio file detected in watch directory
+    AudioDetected,
+
+    /// Audio file queued for processing
+    VoiceQueued,
+
+    /// Voice processing started
+    VoiceProcessingStarted,
+
+    /// Voice processing completed successfully
+    VoiceProcessingCompleted,
+
+    /// Voice processing failed
+    VoiceProcessingFailed,
 }
 
 /// Status of a step or run
@@ -132,6 +151,44 @@ pub enum StepStatus {
 impl Default for StepStatus {
     fn default() -> Self {
         Self::Pending
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Voice Capture Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Status of an item in the voice processing queue
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VoiceQueueStatus {
+    /// Waiting to be processed
+    Pending,
+
+    /// Currently being processed
+    Processing,
+
+    /// Successfully completed
+    Done,
+
+    /// Processing failed
+    Failed,
+}
+
+impl Default for VoiceQueueStatus {
+    fn default() -> Self {
+        Self::Pending
+    }
+}
+
+impl std::fmt::Display for VoiceQueueStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Pending => write!(f, "pending"),
+            Self::Processing => write!(f, "processing"),
+            Self::Done => write!(f, "done"),
+            Self::Failed => write!(f, "failed"),
+        }
     }
 }
 
