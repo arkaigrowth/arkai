@@ -1,0 +1,122 @@
+# Ticket: Phase 0 Security Hardening + Email Schema
+# Worker: triage-sidecar
+# Priority: BLOCKING (all other work depends on this)
+
+id: PHASE0_HARDEN
+worker: triage-sidecar
+status: BLOCKED
+blockedBy: []  # No dependencies - this is the first ticket
+branch: feat/phase0-harden
+created: 2026-01-26T12:00:00Z
+updated: 2026-01-26T12:00:00Z
+
+# Files worker MUST read before starting
+context:
+  - .claude/CLAUDE.md                           # Project overview
+  - docs/SECURITY_POSTURE.md                    # EXECUTE THIS - follow exactly
+  - contracts/README.md                         # Schema standards
+  - contracts/voice_intake.schema.json          # Template for email schema
+
+# What to do
+task: |
+  Execute Phase 0 security hardening on VPS (clawdbot-vps) AND create email triage schema.
+
+  CRITICAL: Follow docs/SECURITY_POSTURE.md EXACTLY. Steps are ordered to prevent lockout.
+
+  Part 1: VPS Hardening
+  1. SSH to clawdbot-vps
+  2. Create olek-admin user with sudo (Step 1 in doc)
+  3. VERIFY olek-admin SSH works in NEW terminal (Step 2 - DO NOT SKIP)
+  4. Only then remove clawdbot from sudoers and docker (Step 3)
+  5. Create arkai-exec user with explicit permissions (Step 4)
+  6. Apply MVP egress filtering (Step 5)
+  7. Test that Claudia still responds on Telegram after iptables changes
+
+  Part 2: Email Schema
+  1. Create contracts/email_triage.schema.json
+  2. Model after voice_intake.schema.json (same style, same rigor)
+  3. Include: EmailTriageItem, EmailEvent, TriageClassification types
+  4. Follow Reader/Actor/Critic pattern from SECURITY_POSTURE.md
+
+  Part 3: Gmail Scaffold (optional if time permits)
+  1. Create src/gmail/ directory structure
+  2. Stub files: mod.rs, reader.rs, critic.rs, actor.rs
+  3. No implementation - just structure
+
+# Machine-checkable acceptance criteria
+acceptance:
+  - description: "clawdbot has no sudo access"
+    cmd: "ssh clawdbot-vps 'sudo -l -U clawdbot 2>&1'"
+    expect: "not allowed to run sudo"
+
+  - description: "clawdbot not in docker group"
+    cmd: "ssh clawdbot-vps 'groups clawdbot'"
+    expect_not: "docker"
+
+  - description: "olek-admin can sudo"
+    cmd: "ssh olek-admin@clawdbot-vps 'sudo whoami'"
+    expect: "root"
+
+  - description: "arkai-exec user exists"
+    cmd: "ssh clawdbot-vps 'id arkai-exec'"
+    expect: "uid="
+
+  - description: "Claudia responds after iptables"
+    manual: true
+    description: "Send test message to Claudia via Telegram, confirm response"
+
+  - description: "Email schema exists and is valid"
+    file: contracts/email_triage.schema.json
+    validate: jsonschema
+
+  - description: "Email schema has required types"
+    cmd: "jq '.definitions | keys' contracts/email_triage.schema.json"
+    expect: "EmailTriageItem"
+
+# Expected outputs
+deliverables:
+  - path: contracts/email_triage.schema.json
+    description: "Email triage contract matching voice_intake style"
+  - path: src/gmail/
+    description: "Scaffold directory (optional)"
+    optional: true
+
+# Worker fills these in when complete
+proofs:
+  groups_clawdbot: ""           # Paste output of: groups clawdbot
+  sudo_l_clawdbot: ""           # Paste output of: sudo -l -U clawdbot
+  id_arkai_exec: ""             # Paste output of: id arkai-exec
+  claudia_test: ""              # Paste Claudia's response to test message
+  iptables_list: ""             # Paste output of: sudo iptables -L OUTPUT --line-numbers
+  schema_validation: ""         # Paste output of schema validation command
+
+# Risk assessment
+risk: |
+  LOCKOUT RISK: If you remove clawdbot sudo before verifying olek-admin works,
+  you will be locked out of the VPS with no recovery path.
+
+  EGRESS RISK: Overly restrictive iptables could break Claudia's API calls.
+  Test incrementally. Keep a terminal open as olek-admin during iptables changes.
+
+  CLAUDIA DISRUPTION: Restarting services or changing network could interrupt Claudia.
+  Warn user before any service changes.
+
+rollback: |
+  If locked out: Contact Hetzner support for console access.
+
+  If egress breaks Claudia:
+    ssh olek-admin@clawdbot-vps
+    sudo iptables -F OUTPUT  # Flush all output rules
+    sudo iptables -P OUTPUT ACCEPT  # Reset to permissive
+
+  If arkai-exec has wrong permissions:
+    sudo userdel arkai-exec
+    # Re-run Step 4
+
+# Do not modify these docs (propose changes separately)
+protected_files:
+  - docs/SECURITY_POSTURE.md
+  - docs/ARCHITECTURE.md
+  - .claude/CLAUDE.md
+
+error: null

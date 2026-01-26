@@ -1,0 +1,146 @@
+# Ticket: Voice Intake v1 Implementation
+# Worker: voice-builder
+# Priority: HIGH (but blocked by Phase 0 conceptually - can start in parallel for code)
+
+id: VOICE_INTAKE_V1
+worker: voice-builder
+status: BLOCKED
+blockedBy: []  # Can start code in parallel, but deployment needs PHASE0_HARDEN
+branch: feat/voice-intake-v1
+created: 2026-01-26T12:00:00Z
+updated: 2026-01-26T12:00:00Z
+
+# Files worker MUST read before starting
+context:
+  - .claude/CLAUDE.md                           # Project overview
+  - contracts/voice_intake.schema.json          # OUTPUT MUST CONFORM TO THIS
+  - docs/SECURITY_POSTURE.md                    # Reader/Actor pattern
+  - docs/ARCHITECTURE.md                        # Voice pipeline flow diagram
+  - src/ingest/queue.rs                         # Existing queue implementation
+  - src/ingest/watcher.rs                       # Existing watcher implementation
+
+# What to do
+task: |
+  Implement Voice Intake v1: the complete pipeline from voice memo detection to
+  classified artifact in Obsidian.
+
+  SCOPE BOUNDARIES:
+  - YES: Intent classification, confidence, canonical artifact, daily summary, idempotency
+  - NO: Streaming, TTS, VPS whisper, extra features
+
+  PATTERN: Follow Reader/Actor split from SECURITY_POSTURE.md
+  - Reader (LLM): Classifies intent, outputs JSON only, has NO tools
+  - Actor (Code): Writes to Obsidian, updates Claudia memory
+
+  Implementation Tasks:
+
+  1. INTENT CLASSIFICATION
+     - Enum: NOTE | TASK | IDEA | QUESTION | COMMAND
+     - Confidence score: 0.0 to 1.0
+     - For COMMAND intent: requires_confirmation = true always
+
+  2. CANONICAL ARTIFACT WRITE
+     - Location: ~/Obsidian/MyVault/Inbox/Voice/{date}__{content_hash}.md
+     - Stable ID from content hash (SHA256[0:12])
+     - Frontmatter with: id, created, source, intent, confidence, duration
+     - Body with: summary, transcript, timestamps (collapsible)
+
+  3. DAILY SUMMARY FOR CLAUDIA
+     - Location: ~/.arkai/summaries/{YYYY-MM-DD}/voice.json
+     - Aggregate all voice memos from that day
+     - Include: count, intents breakdown, key topics, action items
+     - Claudia reads this for morning briefing
+
+  4. IDEMPOTENCY
+     - Same audio file processed twice = same output, no duplicate
+     - Use content hash as deduplication key
+     - Check queue before processing: if hash exists with status=done, skip
+
+  5. QUEUE STATUS UPDATES
+     - Write events to voice_queue.jsonl per existing pattern
+     - Status progression: pending → processing → done | failed
+
+# Machine-checkable acceptance criteria
+acceptance:
+  - description: "arkai voice process --once completes without error"
+    cmd: "cargo run -- voice process --once 2>&1"
+    expect_not: "error"
+    expect_not: "panic"
+
+  - description: "Output conforms to voice_intake.schema.json"
+    manual: true
+    description: "Validate queue item JSON against schema"
+
+  - description: "Canonical artifact created with stable ID"
+    manual: true
+    description: "Process same file twice, verify same output path"
+
+  - description: "Daily summary written"
+    cmd: "ls ~/.arkai/summaries/$(date +%Y-%m-%d)/voice.json"
+    expect: "voice.json"
+
+  - description: "Idempotency: no duplicates on re-process"
+    manual: true
+    description: "Process file, process again, verify single artifact"
+
+  - description: "Intent classification present"
+    manual: true
+    description: "Output JSON includes intent enum and confidence"
+
+# Expected outputs
+deliverables:
+  - path: src/ingest/classifier.rs
+    description: "Intent classification logic (Reader pattern)"
+  - path: src/ingest/depositor.rs
+    description: "Obsidian artifact writer (Actor pattern)"
+  - path: src/ingest/summarizer.rs
+    description: "Daily summary generator"
+  - path: tests/fixtures/sample_voice_1.m4a
+    description: "Test audio file 1"
+    optional: true
+  - path: tests/fixtures/sample_voice_2.m4a
+    description: "Test audio file 2"
+    optional: true
+  - path: tests/fixtures/expected_output_1.json
+    description: "Expected classification for sample 1"
+  - path: tests/fixtures/expected_output_2.json
+    description: "Expected classification for sample 2"
+  - path: tests/voice_intake_test.rs
+    description: "Integration test proving idempotency"
+
+# Worker fills these in when complete
+proofs:
+  cargo_build: ""               # Paste output of: cargo build --release 2>&1 | tail -5
+  process_once: ""              # Paste output of: cargo run -- voice process --once
+  artifact_path: ""             # Path to created Obsidian artifact
+  summary_path: ""              # Path to daily summary JSON
+  idempotency_test: ""          # Paste test output showing no duplicate
+  schema_validation: ""         # Paste jsonschema validation result
+
+# Risk assessment
+risk: |
+  OBSIDIAN PATH: Hardcoded vault path may not exist on all machines.
+  Use config or environment variable.
+
+  WHISPER DEPENDENCY: If using local whisper, binary must be installed.
+  Document in README or check at startup.
+
+  TELEGRAM ROUTE: If using Telegram for transcription, needs bot token.
+  Fail gracefully if not configured.
+
+rollback: |
+  If artifacts are malformed:
+    rm ~/Obsidian/MyVault/Inbox/Voice/{date}__*.md
+    # Re-run with fixes
+
+  If queue is corrupted:
+    # Queue is append-only, so just add correcting events
+    # Or backup and recreate: mv voice_queue.jsonl voice_queue.jsonl.bak
+
+# Do not modify these docs (propose changes separately)
+protected_files:
+  - docs/SECURITY_POSTURE.md
+  - docs/ARCHITECTURE.md
+  - contracts/voice_intake.schema.json  # This is your target, not to modify
+
+error: null

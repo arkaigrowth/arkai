@@ -155,24 +155,45 @@ Phase 3: TTS/Voice Response     ← HOLD, not now
 
 ---
 
+## Ticket System (NEW - 2026-01-26)
+
+Work is now tracked via YAML ticket files in `.ralph/memory/tickets/`.
+
+| Ticket ID | Worker | Status | File |
+|-----------|--------|--------|------|
+| `PHASE0_HARDEN` | triage-sidecar | BLOCKED | `.ralph/memory/tickets/PHASE0_HARDEN.yaml` |
+| `VOICE_INTAKE_V1` | voice-builder | BLOCKED | `.ralph/memory/tickets/VOICE_INTAKE_V1.yaml` |
+
+**Worker protocol:** Read `.claude/CLAUDE.md` → Read ticket file → Create branch → Execute → Update proofs → Set status REVIEW
+
+---
+
 ## Commands for Other Sessions
 
 ### For triage-sidecar:
 ```
-Read docs/SECURITY_POSTURE.md first.
-Complete Phase 0 hardening before any Gmail work.
-Create contracts/email_triage.schema.json using voice_intake as template.
+Your ticket: .ralph/memory/tickets/PHASE0_HARDEN.yaml
+
+1. Read .claude/CLAUDE.md for project overview
+2. Read your ticket file for full task details
+3. git checkout -b feat/phase0-harden
+4. Execute per ticket (Phase 0 hardening + email schema)
+5. Fill in proofs section of ticket
+6. Set status: REVIEW
+7. Commit and push
 ```
 
 ### For arkai-voice-builder:
 ```
-Freeze streaming/audio-to-VPS ideas.
-Complete Voice Intake v1 only:
-- Intent classification + confidence
-- Canonical artifact write
-- Daily memory summary
-- Idempotency
-Follow Reader/Actor pattern from SECURITY_POSTURE.md.
+Your ticket: .ralph/memory/tickets/VOICE_INTAKE_V1.yaml
+
+1. Read .claude/CLAUDE.md for project overview
+2. Read your ticket file for full task details
+3. git checkout -b feat/voice-intake-v1
+4. Execute per ticket (Voice Intake v1)
+5. Fill in proofs section of ticket
+6. Set status: REVIEW
+7. Commit and push
 ```
 
 ---
