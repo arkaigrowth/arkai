@@ -3,6 +3,7 @@
 //! Adapters provide a unified interface for interacting with external
 //! AI services like Fabric and Telegram.
 
+pub mod clawdbot;
 pub mod fabric;
 pub mod telegram;
 
@@ -17,6 +18,9 @@ pub use fabric::{ACTION_YOUTUBE, ACTION_WEB};
 
 // Re-export Telegram adapter
 pub use telegram::{TelegramClient, TelegramConfig};
+
+// Re-export Clawdbot adapter
+pub use clawdbot::ClawdbotClient;
 
 /// Output from an adapter execution
 #[derive(Debug, Clone)]
