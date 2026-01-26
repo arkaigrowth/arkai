@@ -1,0 +1,211 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arkai.dev/schemas/acceptance_criterion.schema.json",
+  "title": "Acceptance Criterion",
+  "description": "Schema for acceptance criteria in ticket YAML files. Defines secure, machine-executable validation checks.",
+  "version": "1.0.0",
+
+  "type": "object",
+  "required": ["id", "description", "check"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "Unique criterion ID (snake_case, e.g., 'clawdbot_no_sudo')"
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable description of what this checks"
+    },
+    "check": {
+      "oneOf": [
+        { "$ref": "#/definitions/CommandCheck" },
+        { "$ref": "#/definitions/FileCheck" },
+        { "$ref": "#/definitions/ManualCheck" }
+      ],
+      "description": "The check to perform"
+    }
+  },
+  "additionalProperties": false,
+
+  "definitions": {
+    "CommandCheck": {
+      "type": "object",
+      "required": ["type", "cmd", "expect"],
+      "properties": {
+        "type": {
+          "const": "command",
+          "description": "Indicates this is a command check"
+        },
+        "cmd": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "description": "Command as argv array. MUST be array, NOT string. Executed with shell=False for security."
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300,
+          "default": 30,
+          "description": "Maximum execution time before kill"
+        },
+        "working_dir": {
+          "type": "string",
+          "description": "Working directory for command (default: repo root)"
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Additional environment variables"
+        },
+        "expect": {
+          "$ref": "#/definitions/CommandExpectations",
+          "description": "Expected outcomes"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "CommandExpectations": {
+      "type": "object",
+      "properties": {
+        "exit_code": {
+          "type": "integer",
+          "default": 0,
+          "description": "Expected exit code (default: 0 = success)"
+        },
+        "stdout_contains": {
+          "type": "string",
+          "description": "Substring that must appear in stdout"
+        },
+        "stdout_not_contains": {
+          "type": "string",
+          "description": "Substring that must NOT appear in stdout"
+        },
+        "stdout_matches": {
+          "type": "string",
+          "description": "Regex pattern that stdout must match"
+        },
+        "stdout_json_path": {
+          "type": "string",
+          "description": "jq-style path to extract from JSON stdout (e.g., '.results.count')"
+        },
+        "stdout_json_value": {
+          "description": "Expected value at stdout_json_path (any type)"
+        },
+        "stdout_json_value_gte": {
+          "type": "number",
+          "description": "Value at stdout_json_path must be >= this"
+        },
+        "stdout_json_value_lte": {
+          "type": "number",
+          "description": "Value at stdout_json_path must be <= this"
+        },
+        "stderr_contains": {
+          "type": "string",
+          "description": "Substring that must appear in stderr"
+        },
+        "stderr_empty": {
+          "type": "boolean",
+          "description": "If true, stderr must be empty"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "FileCheck": {
+      "type": "object",
+      "required": ["type", "path"],
+      "properties": {
+        "type": {
+          "const": "file",
+          "description": "Indicates this is a file check"
+        },
+        "path": {
+          "type": "string",
+          "description": "Path to file (relative to repo root)"
+        },
+        "expect": {
+          "$ref": "#/definitions/FileExpectations",
+          "description": "Expected file properties"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "FileExpectations": {
+      "type": "object",
+      "properties": {
+        "exists": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether file should exist"
+        },
+        "json_schema": {
+          "type": "string",
+          "description": "Path to JSON schema file to validate against"
+        },
+        "contains": {
+          "type": "string",
+          "description": "Substring that must appear in file content"
+        },
+        "not_contains": {
+          "type": "string",
+          "description": "Substring that must NOT appear in file content"
+        },
+        "matches": {
+          "type": "string",
+          "description": "Regex pattern that file content must match"
+        },
+        "min_lines": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Minimum number of lines"
+        },
+        "max_lines": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of lines"
+        },
+        "min_size_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Minimum file size"
+        },
+        "max_size_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum file size"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "ManualCheck": {
+      "type": "object",
+      "required": ["type", "instructions"],
+      "properties": {
+        "type": {
+          "const": "manual",
+          "description": "Indicates this requires human verification"
+        },
+        "instructions": {
+          "type": "string",
+          "description": "Instructions for human verifier"
+        },
+        "prompt": {
+          "type": "string",
+          "default": "Did the manual check pass?",
+          "description": "Question to ask human (expects y/n)"
+        },
+        "evidence_required": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, human must provide evidence (screenshot, log paste)"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

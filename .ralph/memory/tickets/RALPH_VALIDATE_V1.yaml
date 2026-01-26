@@ -1,0 +1,349 @@
+# Ticket: Ralph Validate/Report/Propose CLI
+# Worker: TBD (master can assign)
+# Priority: HIGH (enables automation loop)
+# Security Model: Unprivileged, no shell exec, structured outputs
+
+id: RALPH_VALIDATE_V1
+worker: null  # Master assigns when ready
+status: BLOCKED
+blockedBy:
+  - VOICE_INTAKE_V1  # Complete current work first
+branch: feat/ralph-validate-v1
+created: 2026-01-26T18:00:00Z
+updated: 2026-01-26T18:00:00Z
+
+# ═══════════════════════════════════════════════════════════════════
+# DESIGN PRINCIPLES (Chad-approved)
+# ═══════════════════════════════════════════════════════════════════
+#
+# 1. NO SHELL EXECUTION
+#    - Commands are argv arrays, executed with shell=False
+#    - No eval(), no string interpolation, no backticks
+#    - Prevents shell injection from malicious ticket YAML
+#
+# 2. EXIT CODES ARE PRIMARY
+#    - exit 0 = PASS, non-zero = FAIL
+#    - Output patterns are secondary validation (optional)
+#    - Structured JSON output preferred over text parsing
+#
+# 3. PROPOSE, DON'T MERGE
+#    - Default action: generate report + propose PR
+#    - Human approves merge (until confidence established)
+#    - --auto-merge flag exists but requires explicit opt-in
+#
+# 4. LEAST PRIVILEGE
+#    - Ralph runs as unprivileged user
+#    - No secret mounts, no sudo, no docker
+#    - Can only read tickets, run validation commands, write reports
+#
+# 5. SPEC→TICKETS STAYS HUMAN
+#    - Decomposition remains manual/supervised
+#    - Ralph validates and reports, doesn't create tickets
+#
+# ═══════════════════════════════════════════════════════════════════
+
+context:
+  - .claude/CLAUDE.md
+  - .ralph/memory/tickets/README.md
+  - contracts/voice_intake.schema.json  # Example of structured schema
+
+# ═══════════════════════════════════════════════════════════════════
+# COMMAND SCHEMA (argv arrays, no shell)
+# ═══════════════════════════════════════════════════════════════════
+#
+# Old (INSECURE):
+#   cmd: "ssh clawdbot-vps 'groups clawdbot'"
+#   expect: "clawdbot : clawdbot"
+#
+# New (SECURE):
+#   cmd: ["ssh", "clawdbot-vps", "groups", "clawdbot"]
+#   expect:
+#     exit_code: 0
+#     stdout_contains: "clawdbot : clawdbot"
+#     stdout_not_contains: "docker"
+#
+# Or with structured output:
+#   cmd: ["cargo", "test", "--", "--format", "json"]
+#   expect:
+#     exit_code: 0
+#     json_path: ".test_count"
+#     json_value_gte: 1
+#
+# ═══════════════════════════════════════════════════════════════════
+
+task: |
+  Implement `ralph` CLI with three commands: validate, report, propose.
+
+  ## Commands
+
+  ### ralph validate <TICKET_ID>
+  Runs acceptance criteria for a ticket, outputs structured results.
+
+  ```bash
+  ralph validate PHASE0_HARDEN
+  # Reads .ralph/memory/tickets/PHASE0_HARDEN.yaml
+  # Runs each acceptance criterion
+  # Writes .ralph/artifacts/PHASE0_HARDEN/validation.json
+  # Exit 0 if all pass, exit 1 if any fail
+  ```
+
+  ### ralph report <TICKET_ID>
+  Generates human-readable report from validation results.
+
+  ```bash
+  ralph report PHASE0_HARDEN
+  # Reads .ralph/artifacts/PHASE0_HARDEN/validation.json
+  # Writes .ralph/artifacts/PHASE0_HARDEN/report.md
+  # Prints summary to stdout
+  ```
+
+  ### ralph propose <TICKET_ID>
+  Creates PR with validation report (does NOT merge).
+
+  ```bash
+  ralph propose PHASE0_HARDEN
+  # Requires: ticket status == REVIEW, validation passed
+  # Creates PR via gh CLI
+  # Adds validation report to PR description
+  # Prints PR URL
+  ```
+
+  ## Artifact Structure
+
+  ```
+  .ralph/
+  ├── memory/
+  │   └── tickets/           # Ticket YAML files
+  └── artifacts/
+      └── {TICKET_ID}/
+          ├── validation.json    # Structured validation results
+          ├── report.md          # Human-readable report
+          └── logs/
+              └── {criterion_id}.log  # Raw command output
+  ```
+
+  ## Implementation Language
+
+  Rust preferred (matches arkai), Python acceptable.
+  If Rust: add to existing arkai binary as `arkai ralph validate`
+  If Python: standalone script at scripts/ralph.py
+
+  ## Security Requirements
+
+  - Execute commands with Rust `std::process::Command` (no shell)
+  - Or Python `subprocess.run(..., shell=False)`
+  - Validate ticket YAML against schema before execution
+  - Log all command executions to audit trail
+  - Run as current user (no privilege escalation)
+
+# ═══════════════════════════════════════════════════════════════════
+# UPDATED ACCEPTANCE CRITERIA SCHEMA
+# ═══════════════════════════════════════════════════════════════════
+#
+# This ticket also defines the NEW acceptance criteria format that
+# all future tickets should use:
+
+acceptance_schema:
+  type: object
+  required: [id, description, check]
+  properties:
+    id:
+      type: string
+      description: "Unique criterion ID (e.g., 'clawdbot_no_sudo')"
+    description:
+      type: string
+      description: "Human-readable description"
+    check:
+      oneOf:
+        - $ref: "#/definitions/CommandCheck"
+        - $ref: "#/definitions/FileCheck"
+        - $ref: "#/definitions/ManualCheck"
+
+  definitions:
+    CommandCheck:
+      type: object
+      required: [type, cmd, expect]
+      properties:
+        type:
+          const: "command"
+        cmd:
+          type: array
+          items: { type: string }
+          description: "Argv array - NO SHELL INTERPRETATION"
+        timeout_seconds:
+          type: integer
+          default: 30
+        expect:
+          type: object
+          properties:
+            exit_code:
+              type: integer
+              default: 0
+            stdout_contains:
+              type: string
+            stdout_not_contains:
+              type: string
+            stdout_json_path:
+              type: string
+              description: "jq-style path into JSON stdout"
+            stdout_json_value:
+              description: "Expected value at json_path"
+            stderr_contains:
+              type: string
+
+    FileCheck:
+      type: object
+      required: [type, path]
+      properties:
+        type:
+          const: "file"
+        path:
+          type: string
+        expect:
+          type: object
+          properties:
+            exists:
+              type: boolean
+              default: true
+            json_schema:
+              type: string
+              description: "Path to JSON schema to validate against"
+            contains:
+              type: string
+            min_lines:
+              type: integer
+
+    ManualCheck:
+      type: object
+      required: [type, description]
+      properties:
+        type:
+          const: "manual"
+        description:
+          type: string
+        prompt:
+          type: string
+          description: "Question to ask human (y/n)"
+
+# ═══════════════════════════════════════════════════════════════════
+# ACCEPTANCE CRITERIA FOR THIS TICKET
+# ═══════════════════════════════════════════════════════════════════
+
+acceptance:
+  - id: ralph_validate_runs
+    description: "ralph validate command exists and runs"
+    check:
+      type: command
+      cmd: ["cargo", "run", "--", "ralph", "validate", "--help"]
+      expect:
+        exit_code: 0
+        stdout_contains: "validate"
+
+  - id: ralph_validate_output
+    description: "ralph validate produces validation.json"
+    check:
+      type: command
+      cmd: ["cargo", "run", "--", "ralph", "validate", "PHASE0_HARDEN"]
+      expect:
+        exit_code: 0  # All criteria passed
+
+  - id: validation_json_exists
+    description: "Validation artifact created"
+    check:
+      type: file
+      path: ".ralph/artifacts/PHASE0_HARDEN/validation.json"
+      expect:
+        exists: true
+        json_schema: "contracts/validation_result.schema.json"
+
+  - id: ralph_report_runs
+    description: "ralph report generates markdown"
+    check:
+      type: command
+      cmd: ["cargo", "run", "--", "ralph", "report", "PHASE0_HARDEN"]
+      expect:
+        exit_code: 0
+
+  - id: report_md_exists
+    description: "Report artifact created"
+    check:
+      type: file
+      path: ".ralph/artifacts/PHASE0_HARDEN/report.md"
+      expect:
+        exists: true
+        min_lines: 10
+
+  - id: ralph_propose_dry_run
+    description: "ralph propose --dry-run shows PR preview"
+    check:
+      type: command
+      cmd: ["cargo", "run", "--", "ralph", "propose", "--dry-run", "PHASE0_HARDEN"]
+      expect:
+        exit_code: 0
+        stdout_contains: "Would create PR"
+
+  - id: no_shell_execution
+    description: "Codebase has no shell=True or eval()"
+    check:
+      type: command
+      cmd: ["grep", "-r", "-E", "shell=True|eval\\(", "src/"]
+      expect:
+        exit_code: 1  # grep returns 1 when no matches (GOOD)
+
+  - id: commands_are_argv
+    description: "All cmd fields in tickets are arrays"
+    check:
+      type: command
+      cmd: ["bash", "-c", "! grep -r 'cmd:.*\"' .ralph/memory/tickets/*.yaml | grep -v 'cmd: \\[' | grep -v '#'"]
+      # This is meta - checking that we don't have string cmds
+      # In practice, schema validation handles this
+      expect:
+        exit_code: 0
+
+deliverables:
+  - path: src/ralph/mod.rs
+    description: "Ralph CLI module"
+  - path: src/ralph/validate.rs
+    description: "Validation logic"
+  - path: src/ralph/report.rs
+    description: "Report generation"
+  - path: src/ralph/propose.rs
+    description: "PR proposal logic"
+  - path: contracts/validation_result.schema.json
+    description: "Schema for validation.json output"
+  - path: contracts/acceptance_criterion.schema.json
+    description: "Schema for new acceptance criteria format"
+
+proofs:
+  cargo_build: ""
+  validate_help: ""
+  validate_run: ""
+  validation_json: ""
+  report_md: ""
+  propose_dry_run: ""
+  no_shell_grep: ""
+
+risk: |
+  SHELL INJECTION: If cmd arrays are not properly enforced, attacker could
+  craft malicious ticket. Mitigation: Schema validation + code review.
+
+  TIMEOUT HANG: Commands without timeouts could hang forever.
+  Mitigation: Default 30s timeout, configurable per criterion.
+
+  CREDENTIAL LEAK: Validation commands might output secrets.
+  Mitigation: Sanitize logs, don't commit artifacts with secrets.
+
+rollback: |
+  If ralph has bugs:
+    git revert <commit>
+    # Fall back to manual validation
+
+  If validation.json format is wrong:
+    rm -rf .ralph/artifacts/
+    # Re-run after fix
+
+protected_files:
+  - docs/SECURITY_POSTURE.md
+  - docs/ARCHITECTURE.md
+
+error: null
