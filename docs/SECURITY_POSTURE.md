@@ -12,19 +12,54 @@
 | `clawdbot` has `sudo NOPASSWD: ALL` | 🔴 Root equivalent | **FIX REQUIRED** |
 | `clawdbot` in `docker` group | 🔴 Root equivalent | **FIX REQUIRED** |
 | Telegram bot token in code | ⚠️ Medium | Acceptable for now |
-| No egress filtering | ⚠️ Medium | Should lock down |
+| No egress filtering | ⚠️ Medium | **FIX IN PHASE 0** |
 
 ---
 
 ## Phase 0: Hardening (PREREQUISITE)
 
+> ⚠️ **DO NOT SKIP STEPS. DO NOT PROCEED UNTIL VERIFIED.**
+> Following these steps out of order can lock you out of the VPS.
+
 **Must complete before Gmail triage goes live.**
 
-### 1. Remove clawdbot Privileges
+### Step 1: Create Admin User (DO THIS FIRST)
 
 ```bash
-# SSH to VPS as root or another sudo user
+# SSH to VPS as clawdbot (while you still have sudo)
 ssh clawdbot-vps
+
+# Create a dedicated admin user for yourself
+sudo useradd -m -s /bin/bash olek-admin
+sudo usermod -aG sudo olek-admin
+sudo passwd olek-admin  # Set a strong password
+
+# Add your SSH key to the new admin user
+sudo mkdir -p /home/olek-admin/.ssh
+sudo cp ~/.ssh/authorized_keys /home/olek-admin/.ssh/
+sudo chown -R olek-admin:olek-admin /home/olek-admin/.ssh
+sudo chmod 700 /home/olek-admin/.ssh
+sudo chmod 600 /home/olek-admin/.ssh/authorized_keys
+```
+
+### Step 2: VERIFY Admin Login (DO NOT SKIP)
+
+```bash
+# In a NEW terminal (keep clawdbot session open as backup)
+ssh olek-admin@clawdbot-vps
+
+# Verify sudo works
+sudo whoami  # Should output: root
+
+# Only proceed if this works!
+```
+
+### Step 3: Remove clawdbot Privileges
+
+```bash
+# Now safe to remove clawdbot privileges
+# SSH as olek-admin (not clawdbot)
+ssh olek-admin@clawdbot-vps
 
 # Remove from sudoers
 sudo visudo
@@ -34,33 +69,75 @@ sudo visudo
 sudo gpasswd -d clawdbot docker
 
 # Verify
-groups clawdbot  # Should NOT show docker
-sudo -l -U clawdbot  # Should show nothing or limited
+groups clawdbot  # Should NOT show docker or sudo
+sudo -l -U clawdbot  # Should show "not allowed to run sudo"
 ```
 
-### 2. Create Execution User
+### Step 4: Create Execution User with Explicit Permissions
 
 ```bash
-# Create non-privileged user for arkai execution
+# Create arkai-exec user
 sudo useradd -m -s /bin/bash arkai-exec
 
-# NO sudo access
-# NO docker access
-# Can only run specific binaries
+# Create required directories
+sudo mkdir -p /home/arkai-exec/.arkai
+sudo mkdir -p /home/arkai-exec/results
+sudo mkdir -p /home/arkai-exec/gmail-cache
+sudo chown -R arkai-exec:arkai-exec /home/arkai-exec/
 ```
 
-### 3. Egress Lockdown (Future)
+**arkai-exec Permission Model:**
+
+| CAN Access | CANNOT Access |
+|------------|---------------|
+| `/home/arkai-exec/.arkai/` | `/home/clawdbot/clawd/` (Claudia workspace) |
+| `/home/arkai-exec/results/` | `/home/clawdbot/.clawdbot/` (session store) |
+| `/home/arkai-exec/gmail-cache/` | Any SSH keys or credentials |
+| Read-only: `/home/clawdbot/arkai/` | sudo or docker |
 
 ```bash
-# Allow only:
-# - GitHub (for git pull)
-# - api.telegram.org (for Claudia)
-# - api.anthropic.com (for LLM calls)
-# - api.openai.com (for Whisper)
-# - accounts.google.com, gmail.googleapis.com (for Gmail API)
-
-# Block everything else
+# Set up read-only access to arkai repo for arkai-exec
+sudo setfacl -R -m u:arkai-exec:rx /home/clawdbot/arkai
+sudo setfacl -R -m u:arkai-exec:rx /home/clawdbot/fabric-arkai
 ```
+
+### Step 5: Minimal Egress Filtering (MVP)
+
+```bash
+# Install iptables-persistent if not present
+sudo apt install -y iptables-persistent
+
+# Allow established connections
+sudo iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+# Allow loopback
+sudo iptables -A OUTPUT -o lo -j ACCEPT
+
+# Allow DNS
+sudo iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
+sudo iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
+
+# Allow HTTPS to specific domains (by IP ranges - update as needed)
+# GitHub
+sudo iptables -A OUTPUT -p tcp --dport 443 -d 140.82.112.0/20 -j ACCEPT
+# Telegram
+sudo iptables -A OUTPUT -p tcp --dport 443 -d 149.154.160.0/20 -j ACCEPT
+# Anthropic API (check current IPs)
+sudo iptables -A OUTPUT -p tcp --dport 443 -d api.anthropic.com -j ACCEPT
+# OpenAI API
+sudo iptables -A OUTPUT -p tcp --dport 443 -d api.openai.com -j ACCEPT
+# Google APIs (Gmail)
+sudo iptables -A OUTPUT -p tcp --dport 443 -d 142.250.0.0/15 -j ACCEPT
+
+# Log and drop everything else
+sudo iptables -A OUTPUT -j LOG --log-prefix "EGRESS_BLOCKED: "
+sudo iptables -A OUTPUT -j DROP
+
+# Save rules
+sudo netfilter-persistent save
+```
+
+**Note:** This is MVP egress. For production, use a proper allowlist with DNS-based rules.
 
 ---
 
@@ -80,8 +157,7 @@ sudo useradd -m -s /bin/bash arkai-exec
 ┌─────────────────────────────▼───────────────────────────────────┐
 │  CRITIC (Code)                                                   │
 │  - Validates JSON schema                                        │
-│  - Checks for policy violations                                 │
-│  - Blocks: "forward", "send", "external links", "credentials"   │
+│  - Checks for policy violations (see below)                     │
 │  - Rejects malformed or suspicious output                       │
 └─────────────────────────────┬───────────────────────────────────┘
                               │ Validated action
@@ -94,14 +170,6 @@ sudo useradd -m -s /bin/bash arkai-exec
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Why This Works
-
-1. **Prompt injection is contained** — Even if malicious content tricks the Reader, it can only output JSON. No tool access.
-
-2. **Critic is deterministic** — Code-based validation catches policy violations. No LLM judgment.
-
-3. **Actor has limited blast radius** — Can only do pre-approved safe actions (drafts, labels).
-
 ---
 
 ## Gmail-Specific Security
@@ -112,18 +180,52 @@ sudo useradd -m -s /bin/bash arkai-exec
 - ✅ Archive (move to archive)
 - ✅ Mark read/unread
 
-### Blocked Actions (Critic rejects)
-- ❌ Send email
-- ❌ Delete email
-- ❌ Forward email
-- ❌ Any action with external URLs in body
-- ❌ Any action mentioning credentials/passwords
+### Critic Policy Rules (PRECISE)
 
-### Data Handling
-- Email bodies: Encrypted at rest
-- Retention: 7-14 days max
-- Raw bodies: Reader sees them, Claudia does NOT (unless explicitly requested)
-- Claudia sees: Metadata + summary + action recommendations
+The Critic BLOCKS actions when:
+
+| Rule | Blocks | Allows |
+|------|--------|--------|
+| **No send** | Any action with `"send": true` | Drafts, labels, archive |
+| **No delete** | Any action with `"delete": true` | Everything else |
+| **No forward** | Any action with `"forward": true` | Everything else |
+| **No link-following** | Draft body contains URLs not in original email | URLs that were in original |
+| **No recipient changes** | Draft adds recipients not in original thread | Reply to existing recipients |
+| **No credential requests** | Draft asks for passwords, tokens, keys | Normal business content |
+| **No external callbacks** | Draft includes webhook URLs, API endpoints | Normal content |
+
+**Key distinction:** Emails containing URLs are ALLOWED. The Critic blocks *actions that manipulate or follow* URLs, not emails that contain them.
+
+### Email Body Storage (CONCRETE DECISION)
+
+**Implementation:**
+- **Storage:** SQLite database at `/home/arkai-exec/gmail-cache/emails.db`
+- **Encryption:** Per-record AES-256-GCM encryption
+- **Key:** Envelope key stored at `/home/arkai-exec/.arkai/gmail.key` (readable only by arkai-exec)
+- **Retention:** 7 days automatic deletion via cron job
+
+```sql
+CREATE TABLE emails (
+    id TEXT PRIMARY KEY,
+    thread_id TEXT,
+    subject TEXT,  -- unencrypted (low sensitivity)
+    sender TEXT,   -- unencrypted
+    received_at TEXT,
+    body_encrypted BLOB,  -- AES-256-GCM encrypted
+    iv BLOB,
+    triage_result TEXT,  -- JSON summary (unencrypted)
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_received ON emails(received_at);
+```
+
+```bash
+# Retention cron (add to arkai-exec crontab)
+0 3 * * * sqlite3 /home/arkai-exec/gmail-cache/emails.db "DELETE FROM emails WHERE created_at < datetime('now', '-7 days');"
+```
+
+**Claudia sees:** `triage_result` JSON only (summary, priority, recommended action). NOT `body_encrypted`.
 
 ---
 
@@ -164,17 +266,27 @@ sudo useradd -m -s /bin/bash arkai-exec
 - Send emails directly
 - Execute voice commands without confirmation
 
-### Claudia's Bash (If Ever Enabled)
+---
 
-**ONLY via sandboxed execution:**
+## 🚨 BASH ACCESS: FORBIDDEN UNTIL HARDENING VERIFIED
+
+> **DO NOT ENABLE BASH FOR CLAUDIA UNTIL:**
+> 1. clawdbot has ZERO sudo access
+> 2. clawdbot has ZERO docker group membership
+> 3. Sandbox mounts are read-only by default
+> 4. This checklist is 100% complete
+
+If bash is ever enabled, it MUST use sandboxed execution:
+
 ```bash
-firejail --private --net=none --timeout=30 bash -c "command"
+# Firejail (preferred)
+firejail --private --net=none --timeout=30 --read-only=/ bash -c "command"
+
+# Or Docker ephemeral container
+docker run --rm --network none --read-only --user nobody alpine sh -c "command"
 ```
 
-Or Docker ephemeral container:
-```bash
-docker run --rm --network none --read-only alpine sh -c "command"
-```
+**Enabling bash without completing hardening is a critical security violation.**
 
 ---
 
@@ -198,16 +310,24 @@ All actions must be logged to append-only JSONL:
 
 ## Security Checklist (Pre-Launch)
 
+### Phase 0 Hardening
+- [ ] olek-admin user created with sudo
+- [ ] olek-admin SSH login verified (in separate terminal)
 - [ ] clawdbot removed from sudoers
 - [ ] clawdbot removed from docker group
-- [ ] arkai-exec user created
-- [ ] Gmail OAuth token stored securely (not in code)
-- [ ] Email body encryption implemented
-- [ ] Retention policy enforced
-- [ ] Egress allowlist configured
+- [ ] arkai-exec user created with explicit permissions
+- [ ] Egress filtering enabled (MVP allowlist)
+
+### Gmail-Specific
+- [ ] Gmail OAuth token stored in arkai-exec home (not code)
+- [ ] SQLite + encryption implemented
+- [ ] 7-day retention cron job active
+- [ ] Critic policy rules tested with edge cases
+
+### General
 - [ ] Audit logging enabled
 - [ ] Reader/Actor split verified
-- [ ] Critic policy rules tested
+- [ ] All contracts validated (voice_intake, email_triage)
 
 ---
 
