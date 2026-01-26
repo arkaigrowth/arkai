@@ -1,0 +1,83 @@
+# Ticket: Gmail Triage Scaffold
+# Worker: triage-sidecar
+# Priority: MEDIUM
+
+id: GMAIL_SCAFFOLD_V1
+worker: triage-sidecar
+status: DONE
+blockedBy: []
+branch: main  # Created as new repo, not arkai branch
+created: 2026-01-26T14:00:00Z
+updated: 2026-01-26T16:30:00Z
+
+# This was a NEW REPO creation, not arkai branch work
+# Repo: ~/AI/arkai-gmail/ (https://github.com/arkaigrowth/arkai-gmail)
+
+# What to do
+task: |
+  Create the scaffold for arkai-gmail triage system.
+
+  - Separate repo (Python, not Rust)
+  - Implements Reader/Critic/Actor security model
+  - Matches contract: contracts/email_triage.schema.json
+  - No implementation, just structure + types
+
+# Files worker MUST read before starting
+context:
+  - .claude/CLAUDE.md
+  - docs/ARKAI_GMAIL_DESIGN.md
+  - docs/SECURITY_POSTURE.md
+  - contracts/email_triage.schema.json
+
+# Machine-checkable acceptance criteria
+acceptance:
+  - id: repo_exists
+    description: "arkai-gmail repo exists with proper structure"
+    check:
+      type: command
+      cmd: ["ls", "-la", "~/AI/arkai-gmail/src/arkai_gmail/"]
+      expect:
+        exit_code: 0
+
+  - id: security_model_enforced
+    description: "reader.py has no Gmail imports, actor.py has Gmail imports"
+    check:
+      type: manual
+      instructions: "Review imports in reader.py and actor.py"
+
+  - id: models_match_contract
+    description: "Pydantic models match email_triage.schema.json"
+    check:
+      type: manual
+      instructions: "Compare models.py with contract schema"
+
+# Expected outputs
+deliverables:
+  - path: ~/AI/arkai-gmail/README.md
+    description: "Architecture overview with security model"
+  - path: ~/AI/arkai-gmail/src/arkai_gmail/reader.py
+    description: "Layer C: Reader LLM (NO Gmail imports)"
+  - path: ~/AI/arkai-gmail/src/arkai_gmail/critic.py
+    description: "Layer D: Policy validator (no email body)"
+  - path: ~/AI/arkai-gmail/src/arkai_gmail/actor.py
+    description: "Layer E: Gmail executor (whitelist only)"
+  - path: ~/AI/arkai-gmail/src/arkai_gmail/models.py
+    description: "Pydantic models matching contract"
+
+# Proofs (filled by master after review)
+proofs:
+  repo_created: "✅ ~/AI/arkai-gmail/ exists with 1 commit on main"
+  security_model: "✅ reader.py has FORBIDDEN comment on Gmail imports, actor.py imports googleapiclient"
+  models_validated: "✅ Pydantic models match contract types (ActionType, TriageClassification, etc.)"
+  master_review: "✅ Approved by master session 2026-01-26"
+
+# Risk assessment
+risk: |
+  LOW RISK - This is scaffold only, no actual email processing.
+  Security model is enforced via code structure (import restrictions).
+
+rollback: |
+  rm -rf ~/AI/arkai-gmail/
+  # Or delete GitHub repo via gh repo delete
+
+error: null
