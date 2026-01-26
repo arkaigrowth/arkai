@@ -147,22 +147,27 @@ ssh clawdbot-vps "screen -ls && tail -20 ~/gateway.log"
 
 ---
 
-## Current State (as of 2026-01-25)
+## Current State (as of 2026-01-26)
 
 ### Working ✅
 - Claudia on VPS (Telegram interface, voice transcription)
 - Pattern discovery (246 patterns indexed)
 - `tell-claudia` fish function
 - VPS git sync (arkai + fabric-arkai)
+- Ticket system for multi-session coordination
+
+### Active Tickets 🎫
+- `PHASE0_HARDEN` → triage-sidecar (security hardening + email schema)
+- `VOICE_INTAKE_V1` → voice-builder (voice pipeline implementation)
 
 ### In Progress 🚧
 - `arkai voice process` (Telegram sender) — code written, needs testing
-- arkai binary not built on VPS
-- Voice Memo → Claudia pipeline end-to-end
+- arkai binary not built on VPS (Rust not installed)
+- Phase 0 security hardening (BLOCKING other work)
 
 ### Not Started ❌
-- Gmail triage (`arkai-gmail`)
-- ElevenLabs TTS
+- Gmail triage implementation (after Phase 0)
+- ElevenLabs TTS (HOLD)
 - Claudia → Claude Code task orchestration
 
 ---
@@ -189,6 +194,79 @@ Before ending a session with significant work:
 2. Include: what was done, decisions made, files created, next steps
 3. Commit and push to GitHub
 4. Sync to VPS if Claudia needs to know
+
+---
+
+## Worker Protocol (Multi-Session Coordination)
+
+> **If you're a worker session**, this section defines how you operate.
+> **If you're the master session**, you create tickets and validate deliverables.
+
+### Ticket System
+
+Active work is tracked in **`.ralph/memory/tickets/*.yaml`** files.
+
+Each ticket has:
+- **id**: Unique identifier (e.g., `PHASE0_HARDEN`)
+- **worker**: Which session owns this ticket
+- **status**: `BLOCKED` → `IN_PROGRESS` → `REVIEW` → `DONE`
+- **context**: Files you MUST read before starting
+- **task**: What to do
+- **acceptance**: Machine-checkable criteria
+- **deliverables**: Expected outputs
+- **proofs**: You fill this in when complete
+
+### Worker Workflow
+
+```
+1. Read .claude/CLAUDE.md (this file)
+2. Read your ticket: .ralph/memory/tickets/{YOUR_TICKET}.yaml
+3. Read all files in ticket's `context` section
+4. Create branch: git checkout -b {branch from ticket}
+5. Execute task per acceptance criteria
+6. Update ticket file:
+   - Fill `proofs` section with command outputs
+   - Set `status: REVIEW`
+   - Update `updated` timestamp
+7. Commit and push branch
+8. Signal master: "Ticket {ID} ready for review"
+```
+
+### Deliverable Format (Required)
+
+Every completed ticket MUST include:
+
+1. **Code changes** on feature branch
+2. **Proofs** in ticket file (command outputs, test results)
+3. **Risk notes** (what could break, rollback steps)
+4. **Artifact paths** (files created/modified)
+
+### Merge Gates (Master validates these)
+
+Master will only merge if:
+- [ ] All acceptance criteria pass
+- [ ] Proofs section is complete
+- [ ] Contract schemas validate (if applicable)
+- [ ] Happy-path test passes
+- [ ] No protected files modified without approval
+
+### Protected Files (Worker cannot modify)
+
+These require master approval:
+- `docs/SECURITY_POSTURE.md`
+- `docs/ARCHITECTURE.md`
+- `.claude/CLAUDE.md`
+- `contracts/*.json` (except creating new ones per ticket)
+
+Workers can **propose** changes to protected files in their deliverables.
+
+### Automation Notes (Future Ralph Integration)
+
+The ticket system is designed for future automation:
+- YAML format is machine-parseable
+- Status enum enables state machine tracking
+- Acceptance criteria can be auto-validated
+- Ralph can orchestrate workers via ticket files
 
 ---
 
