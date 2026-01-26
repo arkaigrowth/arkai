@@ -36,6 +36,7 @@ pub mod config;
 pub mod core;
 pub mod domain;
 pub mod evidence;
+pub mod ingest;
 pub mod library;
 
 // Re-export main types at crate root for convenience
@@ -43,3 +44,9 @@ pub use core::Orchestrator;
 pub use domain::{Event, EventType, Run, RunState};
 pub use evidence::{Evidence, MatchResult, MatchStatus, Span, Status as EvidenceStatus};
 pub use library::{Catalog, CatalogItem, ContentId, ContentType, LibraryContent};
+
+// Voice capture (Phase 1)
+pub use ingest::{AudioFileEvent, QueueItem, VoiceMemoWatcher, VoiceQueue, WatcherConfig};
+
+// Telegram integration
+pub use adapters::{TelegramClient, TelegramConfig};

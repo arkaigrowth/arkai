@@ -1,9 +1,10 @@
 //! Adapter interfaces for external systems.
 //!
 //! Adapters provide a unified interface for interacting with external
-//! AI services like Fabric.
+//! AI services like Fabric and Telegram.
 
 pub mod fabric;
+pub mod telegram;
 
 use std::time::Duration;
 
@@ -13,6 +14,9 @@ use async_trait::async_trait;
 // Re-export the Fabric adapter and special actions
 pub use fabric::FabricAdapter;
 pub use fabric::{ACTION_YOUTUBE, ACTION_WEB};
+
+// Re-export Telegram adapter
+pub use telegram::{TelegramClient, TelegramConfig};
 
 /// Output from an adapter execution
 #[derive(Debug, Clone)]
