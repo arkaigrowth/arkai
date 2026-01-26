@@ -1,0 +1,120 @@
+# Ticket: Gmail Implementation Layer A (OAuth + Ingestion)
+# Worker: TBD (next session)
+# Priority: HIGH (enables all other Gmail work)
+
+id: GMAIL_IMPL_LAYER_A
+worker: null  # Assign in next session
+status: BLOCKED
+blockedBy: []  # GMAIL_SCAFFOLD_V1 is complete
+branch: feat/gmail-layer-a
+created: 2026-01-26T18:00:00Z
+updated: 2026-01-26T18:00:00Z
+
+# Files worker MUST read before starting
+context:
+  - .claude/CLAUDE.md                           # Project overview
+  - docs/ARKAI_GMAIL_DESIGN.md                  # Full design doc (Layers A-G)
+  - docs/SECURITY_POSTURE.md                    # Security rules
+  - contracts/email_triage.schema.json          # Contract to implement
+  - ~/AI/arkai-gmail/src/arkai_gmail/ingestion.py   # Stub to implement
+  - ~/AI/arkai-gmail/src/arkai_gmail/models.py      # Pydantic models
+
+# What to do
+task: |
+  Implement Layer A (OAuth + Gmail Ingestion) for arkai-gmail.
+
+  ## Part 1: OAuth Setup
+  1. Create CLI command: `arkai-gmail auth`
+  2. Implement OAuth flow using google-auth-oauthlib
+  3. Store credentials at ~/.arkai-gmail/credentials.json
+  4. Store tokens at ~/.arkai-gmail/token.json
+  5. Handle token refresh automatically
+
+  ## Part 2: Gmail Ingestion
+  1. Implement GmailIngestion class in ingestion.py
+  2. Incremental sync using historyId (efficient for 100+ emails/day)
+  3. Fetch headers first (cheap), body on demand
+  4. Return EmailTriageItem objects (from models.py)
+
+  ## Part 3: CLI Dry Run
+  1. Create CLI command: `arkai-gmail triage --dry-run`
+  2. Fetches new emails, displays count and subjects
+  3. Does NOT process with LLM (that's Layer C)
+
+  ## Google Cloud Setup (User does this manually)
+  1. Create project at console.cloud.google.com
+  2. Enable Gmail API
+  3. Create OAuth credentials (Desktop app)
+  4. Download credentials.json to ~/.arkai-gmail/
+
+# Machine-checkable acceptance criteria
+acceptance:
+  - description: "Auth command exists"
+    cmd: "cd ~/AI/arkai-gmail && python -m arkai_gmail.cli auth --help"
+    expect: "OAuth"
+
+  - description: "Triage dry-run command exists"
+    cmd: "cd ~/AI/arkai-gmail && python -m arkai_gmail.cli triage --help"
+    expect: "dry-run"
+
+  - description: "GmailIngestion class is implemented"
+    cmd: "grep -c 'NotImplementedError' ~/AI/arkai-gmail/src/arkai_gmail/ingestion.py"
+    expect: "0"
+
+  - description: "Fetches emails successfully"
+    manual: true
+    description: "Run arkai-gmail triage --dry-run with valid credentials"
+
+# Expected outputs
+deliverables:
+  - path: ~/AI/arkai-gmail/src/arkai_gmail/cli.py
+    description: "Typer CLI with auth and triage commands"
+  - path: ~/AI/arkai-gmail/src/arkai_gmail/auth.py
+    description: "OAuth flow implementation"
+  - path: ~/AI/arkai-gmail/src/arkai_gmail/ingestion.py
+    description: "Implemented Gmail client (was stub)"
+
+# Worker fills these in when complete
+proofs:
+  auth_help: ""           # Output of: arkai-gmail auth --help
+  dry_run_output: ""      # Output of: arkai-gmail triage --dry-run
+  email_count: ""         # Number of emails fetched
+
+# Risk assessment
+risk: |
+  LOW-MEDIUM RISK
+
+  OAuth Risks:
+  - Credentials must be kept secure (never commit)
+  - Token refresh must be tested
+  - Scopes should be minimal (gmail.readonly, gmail.modify)
+
+  API Risks:
+  - Rate limits: 250 quota units/user/second
+  - historyId can be invalidated (handle gracefully)
+
+rollback: |
+  # Remove credentials (user must re-auth)
+  rm ~/.arkai-gmail/token.json
+
+  # Reset to stub
+  git checkout HEAD -- ~/AI/arkai-gmail/src/arkai_gmail/ingestion.py
+
+protected_files:
+  - docs/ARKAI_GMAIL_DESIGN.md
+  - docs/SECURITY_POSTURE.md
+  - contracts/email_triage.schema.json
+
+# Notes for next session
+notes: |
+  The scaffold is complete at ~/AI/arkai-gmail/
+  All Pydantic models are defined in models.py
+
+  Key implementation details from design doc:
+  - Use history.list API for incremental sync
+  - Store historyId between runs
+  - Fetch headers first (5 quota units), body on demand
+
+  Gmail API scopes needed:
+  - https://www.googleapis.com/auth/gmail.readonly
+  - https://www.googleapis.com/auth/gmail.modify
