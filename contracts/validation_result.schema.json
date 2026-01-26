@@ -1,0 +1,220 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arkai.dev/schemas/validation_result.schema.json",
+  "title": "Validation Result",
+  "description": "Structured output from ralph validate command. Machine-readable validation results.",
+  "version": "1.0.0",
+
+  "type": "object",
+  "required": ["ticket_id", "timestamp", "overall_status", "criteria"],
+  "properties": {
+    "ticket_id": {
+      "type": "string",
+      "description": "Ticket ID that was validated (e.g., 'PHASE0_HARDEN')"
+    },
+    "ticket_path": {
+      "type": "string",
+      "description": "Path to ticket YAML file"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when validation ran"
+    },
+    "overall_status": {
+      "type": "string",
+      "enum": ["PASS", "FAIL", "PARTIAL", "ERROR"],
+      "description": "Overall validation result"
+    },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "total": { "type": "integer" },
+        "passed": { "type": "integer" },
+        "failed": { "type": "integer" },
+        "skipped": { "type": "integer" },
+        "manual": { "type": "integer" }
+      },
+      "required": ["total", "passed", "failed"]
+    },
+    "criteria": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/CriterionResult" },
+      "description": "Results for each acceptance criterion"
+    },
+    "duration_ms": {
+      "type": "integer",
+      "description": "Total validation duration in milliseconds"
+    },
+    "validator_version": {
+      "type": "string",
+      "description": "Version of ralph that ran validation"
+    }
+  },
+  "additionalProperties": false,
+
+  "definitions": {
+    "CriterionResult": {
+      "type": "object",
+      "required": ["id", "description", "status"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Criterion ID from ticket"
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["PASS", "FAIL", "SKIP", "MANUAL", "ERROR"],
+          "description": "Result status"
+        },
+        "check_type": {
+          "type": "string",
+          "enum": ["command", "file", "manual"],
+          "description": "Type of check that was run"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "description": "Check duration in milliseconds"
+        },
+        "command": {
+          "$ref": "#/definitions/CommandExecution",
+          "description": "Command execution details (if check_type=command)"
+        },
+        "file": {
+          "$ref": "#/definitions/FileCheck",
+          "description": "File check details (if check_type=file)"
+        },
+        "error": {
+          "type": ["string", "null"],
+          "description": "Error message if status=ERROR"
+        },
+        "log_path": {
+          "type": "string",
+          "description": "Path to detailed log file for this criterion"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "CommandExecution": {
+      "type": "object",
+      "required": ["argv", "exit_code"],
+      "properties": {
+        "argv": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Command that was executed (argv array)"
+        },
+        "exit_code": {
+          "type": "integer",
+          "description": "Process exit code"
+        },
+        "expected_exit_code": {
+          "type": "integer",
+          "description": "Expected exit code from criterion"
+        },
+        "stdout_length": {
+          "type": "integer",
+          "description": "Length of stdout in bytes"
+        },
+        "stderr_length": {
+          "type": "integer",
+          "description": "Length of stderr in bytes"
+        },
+        "stdout_preview": {
+          "type": "string",
+          "description": "First 500 chars of stdout (for quick inspection)"
+        },
+        "stderr_preview": {
+          "type": "string",
+          "description": "First 500 chars of stderr"
+        },
+        "timed_out": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether command was killed due to timeout"
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "description": "Timeout that was applied"
+        },
+        "expectations": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ExpectationResult" },
+          "description": "Results of each expectation check"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "FileCheck": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "File path that was checked"
+        },
+        "exists": {
+          "type": "boolean",
+          "description": "Whether file exists"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "description": "File size if exists"
+        },
+        "line_count": {
+          "type": "integer",
+          "description": "Number of lines if text file"
+        },
+        "schema_valid": {
+          "type": ["boolean", "null"],
+          "description": "Whether file validates against schema (if specified)"
+        },
+        "schema_errors": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Schema validation errors"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "ExpectationResult": {
+      "type": "object",
+      "required": ["type", "passed"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "exit_code",
+            "stdout_contains",
+            "stdout_not_contains",
+            "stdout_json_path",
+            "stderr_contains"
+          ],
+          "description": "Type of expectation"
+        },
+        "passed": {
+          "type": "boolean",
+          "description": "Whether expectation was met"
+        },
+        "expected": {
+          "description": "Expected value"
+        },
+        "actual": {
+          "description": "Actual value found"
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable explanation"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
