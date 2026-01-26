@@ -10,8 +10,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use clap::Subcommand;
 
-use crate::adapters::TelegramClient;
-use crate::ingest::{VoiceMemoWatcher, VoiceQueue, WatcherConfig};
+use crate::adapters::{ClawdbotClient, TelegramClient};
+use crate::ingest::{transcribe, VoiceMemoWatcher, VoiceQueue, WatcherConfig};
 
 /// Voice capture subcommands
 #[derive(Subcommand, Debug)]
@@ -37,17 +37,25 @@ pub enum VoiceCommands {
         path: Option<String>,
     },
 
-    /// Process pending voice memos (send to Claudia via Telegram)
+    /// Process pending voice memos (send to Claudia via Telegram or Clawdbot)
     Process {
         /// Process only one item and exit
         #[arg(long)]
         once: bool,
 
-        /// Telegram bot token (or use TELEGRAM_BOT_TOKEN env)
+        /// Route: "telegram" (send raw audio) or "clawdbot" (transcribe + send text)
+        #[arg(long, default_value = "telegram")]
+        route: String,
+
+        /// Whisper model for transcription (clawdbot route only)
+        #[arg(long, default_value = "base")]
+        model: String,
+
+        /// Telegram bot token (or use TELEGRAM_BOT_TOKEN env) - telegram route only
         #[arg(long, env = "TELEGRAM_BOT_TOKEN")]
         bot_token: Option<String>,
 
-        /// Telegram chat ID (or use TELEGRAM_CHAT_ID env)
+        /// Telegram chat ID (or use TELEGRAM_CHAT_ID env) - telegram route only
         #[arg(long, env = "TELEGRAM_CHAT_ID")]
         chat_id: Option<String>,
     },
@@ -73,8 +81,8 @@ pub async fn execute(command: VoiceCommands) -> Result<()> {
         VoiceCommands::Status => execute_status().await,
         VoiceCommands::Scan { path } => execute_scan(path).await,
         VoiceCommands::Watch { once, path } => execute_watch(once, path).await,
-        VoiceCommands::Process { once, bot_token, chat_id } => {
-            execute_process(once, bot_token, chat_id).await
+        VoiceCommands::Process { once, route, model, bot_token, chat_id } => {
+            execute_process(once, &route, &model, bot_token, chat_id).await
         }
         VoiceCommands::List { status, limit } => execute_list(status, limit).await,
         VoiceCommands::Config => execute_config().await,
@@ -238,11 +246,29 @@ async fn execute_watch(once: bool, path: Option<String>) -> Result<()> {
     Ok(())
 }
 
-/// Process pending voice memos and send to Claudia via Telegram
+/// Process pending voice memos and send to Claudia
 async fn execute_process(
+    once: bool,
+    route: &str,
+    model: &str,
+    bot_token: Option<String>,
+    chat_id: Option<String>,
+) -> Result<()> {
+    let queue = VoiceQueue::open_default().await?;
+
+    match route {
+        "telegram" => execute_process_telegram(once, bot_token, chat_id, &queue).await,
+        "clawdbot" => execute_process_clawdbot(once, model, chat_id.as_deref(), &queue).await,
+        _ => anyhow::bail!("Unknown route: {}. Use 'telegram' or 'clawdbot'", route),
+    }
+}
+
+/// Process via Telegram (send raw audio)
+async fn execute_process_telegram(
     once: bool,
     bot_token: Option<String>,
     chat_id: Option<String>,
+    queue: &VoiceQueue,
 ) -> Result<()> {
     // Get credentials from args or env
     let bot_token = bot_token
@@ -254,13 +280,11 @@ async fn execute_process(
         .context("Missing Telegram chat ID. Set --chat-id or TELEGRAM_CHAT_ID env var")?;
 
     let client = TelegramClient::new(bot_token, chat_id);
-    let queue = VoiceQueue::open_default().await?;
 
-    println!("🦞 Processing voice queue → Claudia");
+    println!("🦞 Processing voice queue → Claudia (Telegram)");
     println!();
 
     loop {
-        // Get pending items
         let pending = queue.get_pending().await?;
 
         if pending.is_empty() {
@@ -268,7 +292,6 @@ async fn execute_process(
                 println!("✅ No pending items in queue");
                 break;
             }
-            // In continuous mode, wait and check again
             println!("⏳ Waiting for new items... (Ctrl+C to stop)");
             tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
             continue;
@@ -281,10 +304,8 @@ async fn execute_process(
                 &item.id[..8]
             );
 
-            // Mark as processing
             queue.mark_processing(&item.id).await?;
 
-            // Send to Telegram
             match client.send_voice_memo(&item.data.file_path).await {
                 Ok(msg_id) => {
                     println!("   ✅ Sent! (message_id: {})", msg_id);
@@ -305,7 +326,104 @@ async fn execute_process(
             break;
         }
 
-        // Small delay before checking for more
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    }
+
+    Ok(())
+}
+
+/// Process via Clawdbot (transcribe locally, send text to VPS)
+async fn execute_process_clawdbot(
+    once: bool,
+    model: &str,
+    telegram_chat_id: Option<&str>,
+    queue: &VoiceQueue,
+) -> Result<()> {
+    let client = ClawdbotClient::from_env()
+        .context("Clawdbot client setup failed. Set CLAWDBOT_TOKEN env var")?;
+
+    // Optionally deliver to Telegram as well
+    let deliver_to_telegram = telegram_chat_id.is_some();
+
+    println!("🦞 Processing voice queue → Claudia (Clawdbot)");
+    println!("   Model: {}", model);
+    if deliver_to_telegram {
+        println!("   Telegram delivery: enabled");
+    }
+    println!();
+
+    loop {
+        let pending = queue.get_pending().await?;
+
+        if pending.is_empty() {
+            if once {
+                println!("✅ No pending items in queue");
+                break;
+            }
+            println!("⏳ Waiting for new items... (Ctrl+C to stop)");
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            continue;
+        }
+
+        for item in pending {
+            println!(
+                "🎙️  Processing: {} ({})",
+                item.data.file_name,
+                &item.id[..8]
+            );
+
+            queue.mark_processing(&item.id).await?;
+
+            // Step 1: Transcribe locally
+            println!("   📝 Transcribing with Whisper ({})...", model);
+            let audio_path = std::path::PathBuf::from(&item.data.file_path);
+
+            let transcript = match transcribe(&audio_path, model).await {
+                Ok(t) => {
+                    println!("   ✅ Transcribed ({:.0}s, {} chars)", t.duration_seconds, t.text.len());
+                    t
+                }
+                Err(e) => {
+                    println!("   ❌ Transcription failed: {}", e);
+                    queue.mark_failed(&item.id, &format!("Transcription failed: {}", e)).await?;
+                    if once {
+                        return Ok(());
+                    }
+                    continue;
+                }
+            };
+
+            // Step 2: Send to Clawdbot
+            println!("   📤 Sending to Claudia...");
+            match client
+                .send_voice_intake(
+                    &transcript.text,
+                    &item.id,
+                    transcript.duration_seconds,
+                    deliver_to_telegram,
+                    telegram_chat_id,
+                )
+                .await
+            {
+                Ok(_resp) => {
+                    println!("   ✅ Sent to Claudia!");
+                    queue.mark_done(&item.id).await?;
+                }
+                Err(e) => {
+                    println!("   ❌ Failed to send: {}", e);
+                    queue.mark_failed(&item.id, &format!("Clawdbot send failed: {}", e)).await?;
+                }
+            }
+
+            if once {
+                return Ok(());
+            }
+        }
+
+        if once {
+            break;
+        }
+
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     }
 
