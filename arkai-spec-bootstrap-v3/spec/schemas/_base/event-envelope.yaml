@@ -1,0 +1,61 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "arkai://schemas/event-envelope"
+title: "ARKAI Event Envelope (MVP-Compatible)"
+description: "Envelope aligned to SYSTEM_MAP §4 + current Rust reality (JSONL serde). Allows MVP fields now; supports future tracing + payload_ref."
+type: object
+additionalProperties: false
+
+required:
+  - event_id
+  - timestamp
+  - run_id
+  - event_type
+  - idempotency_key
+  - status
+  - schema_version
+
+properties:
+  event_id: { type: string, format: uuid }
+  run_id: { type: string, format: uuid }
+  step_id: { type: ["string","null"] }
+
+  timestamp: { type: string, format: date-time }
+  duration_ms: { type: ["integer","null"], minimum: 0 }
+
+  event_type:
+    type: string
+    enum: ['run_started', 'run_completed', 'run_failed', 'step_started', 'step_completed', 'step_failed', 'step_retrying', 'safety_limit_reached']
+    description: "Serialized EventType enum (snake_case)."
+  status:
+    type: string
+    enum: ['pending', 'running', 'completed', 'failed', 'skipped']
+    description: "Serialized StepStatus enum (snake_case)."
+
+  idempotency_key: { type: string }
+
+  trace_id: { type: ["string","null"] }
+  span_id: { type: ["string","null"] }
+  parent_span_id: { type: ["string","null"] }
+  actor: { type: ["string","null"] }
+  schema_id:
+    type: ["string","null"]
+    description: "Derived in MVP as arkai://events/<event_type>"
+  schema_version:
+    type: string
+    description: "Semver for payload schema."
+
+  payload_summary:
+    type: ["string","null"]
+    description: "MVP inline summary (current Rust)."
+  payload_ref:
+    type: ["string","null"]
+    description: "Future content-addressed payload reference."
+  payload:
+    description: "Optional small inline payload."
+
+  error: { type: ["string","null"] }
+
+anyOf:
+  - required: [payload_summary]
+  - required: [payload_ref]
+  - required: [payload]

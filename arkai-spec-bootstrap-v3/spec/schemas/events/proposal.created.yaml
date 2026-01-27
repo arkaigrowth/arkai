@@ -1,0 +1,11 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "arkai://events/proposal.created"
+title: "proposal.created"
+type: object
+allOf:
+  - $ref: "../_base/event-envelope.yaml"
+properties:
+  schema_id:
+    const: "arkai://events/proposal.created"
+  payload:
+    $ref: "../proposal.yaml"

@@ -1,0 +1,13 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "arkai://schemas/annotation-voice"
+title: "Voice Annotation"
+type: object
+additionalProperties: false
+required: [trace_id, created_at, transcript]
+properties:
+  trace_id: { type: string }
+  span_id: { type: ["string","null"] }
+  created_at: { type: string, format: date-time }
+  audio_ref: { type: ["string","null"] }
+  transcript: { type: string }
+  tags: { type: array, items: { type: string } }

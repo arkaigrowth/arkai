@@ -1,0 +1,17 @@
+id: SC-001
+summary: "<one sentence>"
+touches:
+  - kind: schema
+    name: "arkai://schemas/<name>"
+  - kind: storage
+    name: "jsonl:events.jsonl"
+risk_level: low
+threats:
+  prompt_injection: true
+  data_exfiltration: false
+  blast_radius: true
+guards:
+  - "<guard 1>"
+tests:
+  - "<test 1>"
+rollback: "<how to revert>"
