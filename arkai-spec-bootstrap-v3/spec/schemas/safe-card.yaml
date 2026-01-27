@@ -1,0 +1,30 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "arkai://schemas/safe-card"
+title: "Safe Card"
+type: object
+additionalProperties: false
+required: [id, summary, touches, risk_level, threats, guards, tests, rollback]
+properties:
+  id: { type: string }
+  summary: { type: string }
+  touches:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required: [kind, name]
+      properties:
+        kind: { type: string, enum: ["schema","module","pipeline","docs","ui","storage"] }
+        name: { type: string }
+  risk_level: { type: string, enum: ["low","med","high"] }
+  threats:
+    type: object
+    additionalProperties: false
+    required: [prompt_injection, data_exfiltration, blast_radius]
+    properties:
+      prompt_injection: { type: boolean }
+      data_exfiltration: { type: boolean }
+      blast_radius: { type: boolean }
+  guards: { type: array, items: { type: string } }
+  tests: { type: array, items: { type: string } }
+  rollback: { type: string }
