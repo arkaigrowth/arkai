@@ -1,0 +1,106 @@
+# Ticket: Gmail Core Pipeline (Layers A-G)
+# Worker: triage-sidecar
+# Priority: HIGH - Core functionality
+
+id: GMAIL_CORE_PIPELINE
+worker: triage-sidecar
+status: IN_PROGRESS
+blockedBy: []
+branch: feat/gmail-layers  # Or whatever branch they're using
+created: 2026-01-27T06:00:00Z
+updated: 2026-01-27T06:00:00Z
+
+# Layer-by-layer status (worker updates this)
+layers:
+  A_INGESTION:
+    status: DONE
+    tests: E2E
+    notes: "OAuth + Gmail fetch working"
+  B_GATE:
+    status: DONE
+    tests: E2E
+    notes: "Pre-AI filtering (spam, newsletters)"
+  C_READER:
+    status: DONE
+    tests: E2E
+    notes: "LLM classification with structured output"
+  D_CRITIC:
+    status: DONE
+    tests: 13 unit
+    notes: "Rules-only, typed rules, SQLite rate limits"
+  E_ACTOR:
+    status: DONE
+    tests: 14 unit
+    notes: "Gmail executor with dry_run default, safety checks"
+  F_MEMORY:
+    status: PENDING
+    tests: null
+    notes: "Can stub for MVP - learned preferences"
+  G_AUDIT:
+    status: PENDING
+    tests: null
+    notes: "Event logging - needed for debugging"
+
+# Context files
+context:
+  - docs/ARKAI_GMAIL_DESIGN.md
+  - .ralph/memory/tickets/GMAIL_HYBRID_CRITIC.yaml
+  - .ralph/memory/tickets/GMAIL_PROVIDER_ABSTRACTION.yaml
+
+# Acceptance criteria for full pipeline
+acceptance:
+  - description: "Dry-run triage works end-to-end"
+    cmd: "cd ~/AI/arkai-gmail && python3.11 -m arkai_gmail.cli triage --dry-run --limit 3"
+    expect: "Shows classification + critic verdict for 3 emails"
+
+  - description: "Execute mode requires explicit flag"
+    cmd: "cd ~/AI/arkai-gmail && python3.11 -m arkai_gmail.cli triage --help"
+    expect: "--execute"
+
+  - description: "All unit tests pass"
+    cmd: "cd ~/AI/arkai-gmail && python3.11 -m pytest"
+    expect: "passed"
+
+  - description: "Critic blocks forbidden actions"
+    manual: true
+    description: "Test email with forbidden action gets BLOCK verdict"
+
+  - description: "Actor respects dry_run"
+    manual: true
+    description: "Dry-run shows actions but doesn't execute them"
+
+# Deliverables
+deliverables:
+  - path: ~/AI/arkai-gmail/src/arkai_gmail/
+    description: "Full pipeline implementation"
+  - path: ~/AI/arkai-gmail/tests/
+    description: "Unit tests for all layers"
+
+# Worker fills proofs when complete
+proofs: {}
+
+# Risk assessment
+risk: |
+  MEDIUM RISK - Email automation has consequences
+
+  Mitigations in place:
+  - dry_run=True default
+  - Critic blocks forbidden actions
+  - Forward requires explicit flag
+  - Rate limits prevent runaway
+
+rollback: |
+  # Disable execution
+  # Just don't use --execute flag
+
+  # Revoke Gmail access if needed
+  rm ~/.arkai-gmail/token.json
+
+notes: |
+  ## MVP Definition
+  For MVP, F (Memory) can be stubbed. G (Audit) should at least log to file.
+
+  ## Post-MVP
+  - Provider abstraction (GMAIL_PROVIDER_ABSTRACTION ticket)
+  - LLM Advisor in Critic (GMAIL_HYBRID_CRITIC ticket, FUTURE)
+  - Memory layer for learned preferences
