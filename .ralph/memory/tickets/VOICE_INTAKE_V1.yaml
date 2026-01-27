@@ -4,11 +4,11 @@
 
 id: VOICE_INTAKE_V1
 worker: voice-builder
-status: BLOCKED
+status: REVIEW
 blockedBy: []  # Can start code in parallel, but deployment needs PHASE0_HARDEN
 branch: feat/voice-intake-v1
 created: 2026-01-26T12:00:00Z
-updated: 2026-01-26T12:00:00Z
+updated: 2026-01-26T18:00:00Z
 
 # Files worker MUST read before starting
 context:
@@ -144,3 +144,46 @@ protected_files:
   - contracts/voice_intake.schema.json  # This is your target, not to modify
 
 error: null
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# HANDOFF NOTES (voice-builder session)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+handoff:
+  architecture_decision: |
+    Mac transcribes locally via Whisper, VPS (Claudia) classifies and deposits.
+    This avoids GPU requirements on VPS and leverages Mac's Apple Silicon.
+
+    Flow: Voice Memo → Watcher → Queue → Whisper → ClawdbotClient → Claudia
+    Claudia then: classifies intent → writes to Obsidian → responds via Telegram
+
+  what_was_built:
+    - src/adapters/clawdbot.rs: ClawdbotClient for VPS webhook
+    - src/ingest/transcriber.rs: Local Whisper shell-out
+    - src/ingest/watcher.rs: Voice Memos file watcher
+    - src/ingest/queue.rs: JSONL event-sourced queue
+    - src/cli/voice.rs: CLI with --route flag (telegram | clawdbot)
+
+  env_vars_needed:
+    CLAWDBOT_TOKEN: "Required for clawdbot route - Bearer token for VPS"
+    CLAWDBOT_ENDPOINT: "Optional - defaults to http://arkai-clawdbot:18789/hooks/agent"
+    WHISPER_PATH: "Optional - defaults to /opt/homebrew/bin/whisper"
+    TELEGRAM_BOT_TOKEN: "Required for telegram route"
+    TELEGRAM_CHAT_ID: "Required for telegram route"
+
+  cli_usage:
+    scan: "arkai voice scan"
+    process_telegram: "arkai voice process --route telegram --once"
+    process_clawdbot: "arkai voice process --route clawdbot --model base --once"
+    process_clawdbot_with_tg: "arkai voice process --route clawdbot --chat-id 123456 --once"
+
+  not_built:
+    - src/ingest/classifier.rs: "Not needed - Claudia does classification on VPS"
+    - src/ingest/depositor.rs: "Not needed - Claudia writes to Obsidian"
+    - src/ingest/summarizer.rs: "Not needed - Claudia handles daily summaries"
+    - Integration tests: "Need Whisper + VPS connectivity to test"
+
+  testing_needed:
+    - "Test clawdbot route with real CLAWDBOT_TOKEN"
+    - "Verify Tailscale connectivity to VPS (100.81.12.50)"
+    - "End-to-end: voice memo → transcription → Claudia response"
