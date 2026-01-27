@@ -1,0 +1,21 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "arkai://schemas/capsule"
+title: "Capsule"
+description: "Immutable capture artifact. Treated as untrusted forever."
+type: object
+additionalProperties: false
+required: [id, timestamp, device, trust_level, raw_refs]
+properties:
+  id: { type: string, format: uuid }
+  timestamp: { type: string, format: date-time }
+  device: { type: string, enum: ["watch","iphone","mac","server","unknown"] }
+  trust_level: { type: string, enum: ["untrusted"] }
+  tags_spoken: { type: array, items: { type: string } }
+  raw_refs:
+    type: object
+    additionalProperties: false
+    properties:
+      audio: { type: ["string","null"] }
+      image: { type: ["string","null"] }
+      text: { type: ["string","null"] }
+  signature: { type: ["string","null"] }

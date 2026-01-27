@@ -1,0 +1,13 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "arkai://schemas/proposal"
+title: "Proposal"
+description: "Structured proposal produced by a reader agent. Must be gated before any execution."
+type: object
+additionalProperties: false
+required: [proposal_id, intent, actions]
+properties:
+  proposal_id: { type: string, format: uuid }
+  intent: { type: string }
+  actions: { type: array, items: { type: object } }
+  rationale: { type: ["string","null"], maxLength: 800 }
+  requires_confirmation: { type: boolean, default: false }
