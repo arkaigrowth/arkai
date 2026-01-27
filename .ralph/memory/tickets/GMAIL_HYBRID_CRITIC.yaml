@@ -1,0 +1,273 @@
+# Ticket: Gmail Hybrid Critic (LLM Advisor)
+# Worker: TBD
+# Priority: FUTURE (document the design, don't build yet)
+
+id: GMAIL_HYBRID_CRITIC
+worker: unassigned
+status: FUTURE
+blockedBy: [GMAIL_LAYER_D]  # Must have rules-only critic first
+branch: feat/hybrid-critic
+created: 2026-01-27T05:00:00Z
+updated: 2026-01-27T05:00:00Z
+
+# Why this is FUTURE priority
+rationale: |
+  For personal email triage (~50-100 emails/day), rules-only critic is sufficient.
+  LLM Advisor adds 5% value for 10x complexity.
+
+  Build this when:
+  - Volume exceeds 500+ emails/day
+  - Multiple users with different policies
+  - Automated actions have real consequences (financial, legal)
+  - Evidence that rules miss important edge cases
+
+  This ticket documents the CORRECT design (Chad's steelmanning) so we don't
+  lose the thinking. It's ready to implement when actually needed.
+
+# Context for future implementation
+context:
+  - .claude/CLAUDE.md
+  - docs/ARKAI_GMAIL_DESIGN.md
+  - ~/AI/arkai-gmail/src/arkai_gmail/critic.py  # Rules-only implementation
+
+# Full specification (Chad's steelmanning + refinements)
+task: |
+  Add optional LLM Advisor to Layer D Critic. LLM can ESCALATE but never APPROVE.
+  Rules always have veto power.
+
+  ## Architecture
+
+  ```
+  ┌─────────────────────────────────────────────────────────────┐
+  │                    HYBRID CRITIC                             │
+  ├─────────────────────────────────────────────────────────────┤
+  │                                                              │
+  │   Input: ClassificationResult from Layer C (Reader)         │
+  │                                                              │
+  │   ┌────────────────────────────────────────────────────┐    │
+  │   │  STAGE 1: RULE ENGINE (always runs)                │    │
+  │   │  - Allowlists / Blocklists                         │    │
+  │   │  - Rate limits                                     │    │
+  │   │  - Action caps                                     │    │
+  │   │  - Deterministic inconsistency checks              │    │
+  │   │                                                    │    │
+  │   │  Output: PASS | BLOCK | NEEDS_REVIEW               │    │
+  │   └──────────────────────┬─────────────────────────────┘    │
+  │                          │                                   │
+  │                          ▼                                   │
+  │   ┌────────────────────────────────────────────────────┐    │
+  │   │  STAGE 2: LLM ADVISOR (optional, config-gated)     │    │
+  │   │  - Only runs if Stage 1 = PASS or NEEDS_REVIEW     │    │
+  │   │  - Only runs for medium/high risk actions          │    │
+  │   │  - Receives SAFE CONTEXT only (sanitized)          │    │
+  │   │  - Returns strict JSON schema                      │    │
+  │   │  - Subject to review budgets                       │    │
+  │   │                                                    │    │
+  │   │  Output: PASS | WARN | BLOCK                       │    │
+  │   └──────────────────────┬─────────────────────────────┘    │
+  │                          │                                   │
+  │                          ▼                                   │
+  │   ┌────────────────────────────────────────────────────┐    │
+  │   │  STAGE 3: DECISION MATRIX                          │    │
+  │   │                                                    │    │
+  │   │  Rules BLOCK + LLM *      → BLOCK (rules veto)     │    │
+  │   │  Rules PASS + LLM PASS    → APPROVE                │    │
+  │   │  Rules PASS + LLM WARN    → HUMAN_REVIEW           │    │
+  │   │  Rules PASS + LLM BLOCK   → HUMAN_REVIEW           │    │
+  │   │  Rules PASS + LLM skip    → APPROVE (low risk)     │    │
+  │   │                                                    │    │
+  │   │  KEY: Rules always have veto power                 │    │
+  │   │  KEY: LLM can only escalate, never approve alone   │    │
+  │   └────────────────────────────────────────────────────┘    │
+  │                                                              │
+  └─────────────────────────────────────────────────────────────┘
+  ```
+
+  ## Safe Context (What LLM Advisor Sees)
+
+  CRITICAL: LLM Advisor must NOT see raw email content. Only sanitized context.
+
+  ```python
+  @dataclass
+  class SafeContext:
+      # From classification (already processed by Reader)
+      category: str
+      priority: str
+      proposed_actions: list[str]
+      sender_domain: str
+
+      # Sanitized content (URLs stripped, quotes stripped, length capped)
+      subject_sanitized: str  # max 100 chars, no URLs, no quotes
+      snippet_sanitized: str  # max 200 chars, no URLs, no quotes
+
+      # Deterministic features (can't be injected)
+      has_links: bool
+      has_attachments: bool
+      is_reply: bool
+      sender_seen_before: bool
+      sender_message_count: int  # How many emails from this sender historically
+      thread_age_days: int
+      thread_message_count: int
+
+      # Action metadata
+      action_risk_tier: str  # LOW | MEDIUM | HIGH (from config)
+  ```
+
+  Sanitization function:
+  ```python
+  def sanitize_text(text: str, max_length: int = 100) -> str:
+      # Remove URLs
+      text = re.sub(r'https?://\S+', '[URL]', text)
+      # Remove email addresses
+      text = re.sub(r'\S+@\S+', '[EMAIL]', text)
+      # Remove quoted content
+      text = re.sub(r'>.*$', '', text, flags=re.MULTILINE)
+      # Remove HTML
+      text = re.sub(r'<[^>]+>', '', text)
+      # Truncate
+      return text[:max_length].strip()
+  ```
+
+  ## LLM Advisor Output Schema (Strict)
+
+  ```python
+  class AdvisorVerdict(str, Enum):
+      PASS = "PASS"
+      WARN = "WARN"
+      BLOCK = "BLOCK"
+
+  class AdvisorFlag(str, Enum):
+      CATEGORY_ACTION_MISMATCH = "CATEGORY_ACTION_MISMATCH"
+      PRIORITY_ACTION_MISMATCH = "PRIORITY_ACTION_MISMATCH"
+      UNUSUAL_SENDER_PATTERN = "UNUSUAL_SENDER_PATTERN"
+      SUSPICIOUS_URGENCY = "SUSPICIOUS_URGENCY"
+      POTENTIAL_PHISHING = "POTENTIAL_PHISHING"
+      HIGH_RISK_NEW_SENDER = "HIGH_RISK_NEW_SENDER"
+      THREAD_ANOMALY = "THREAD_ANOMALY"
+
+  @dataclass
+  class AdvisorResponse:
+      verdict: AdvisorVerdict
+      confidence: float  # 0.0-1.0 (for logging only, NOT for decisions)
+      flags: list[AdvisorFlag]  # Empty list = no concerns
+      rationale: str  # Max 1 sentence, for audit log
+  ```
+
+  CRITICAL: Decisions based on FLAGS, not confidence. Confidence is for logging only.
+
+  ## Review Budgets & Circuit Breakers
+
+  ```yaml
+  # config.yaml
+  critic:
+    llm_advisor:
+      enabled: false  # Must explicitly enable
+
+      # Budget controls
+      max_human_reviews_per_hour: 20
+      max_advisor_calls_per_hour: 100
+
+      # Circuit breaker
+      warn_rate_threshold: 0.3  # If >30% of emails get WARN, disable
+      warn_rate_window_size: 50  # Over last 50 emails
+      auto_disable_on_threshold: true
+      cooldown_minutes: 60
+
+      # Risk-tier gating (only run for these tiers)
+      enabled_for_risk_tiers: [MEDIUM, HIGH]
+      # LOW risk = skip advisor entirely (save cost, reduce noise)
+  ```
+
+  ## Deterministic Inconsistency Rules (Stage 1)
+
+  These should be in Rule Engine, NOT LLM Advisor:
+
+  ```python
+  DETERMINISTIC_CHECKS = [
+      # Category-Action mismatches
+      ("category=newsletter AND action=forward", "FLAG"),
+      ("category=billing AND priority=low", "FLAG"),
+      ("category=personal AND action=auto_reply", "FLAG"),
+
+      # Suspicious patterns
+      ("has_links AND sender_seen_before=false AND action!=archive", "FLAG"),
+      ("priority=urgent AND sender_seen_before=false", "FLAG"),
+      ("action=forward AND thread_age_days=0", "FLAG"),
+
+      # Rate anomalies
+      ("sender_message_count > 10 in last hour", "BLOCK"),
+  ]
+  ```
+
+  LLM Advisor is ADDITIVE to these rules, not a replacement.
+
+  ## Implementation Order
+
+  Step 1: Structure (do in Layer D work)
+  - Create CriticAdvisor interface (abstract)
+  - Add config placeholder: llm_advisor.enabled: false
+  - Structure HybridCritic to accept optional advisor
+  - DO NOT implement actual advisor
+
+  Step 2: Implementation (this ticket, when needed)
+  - Implement SafeContext builder with sanitization
+  - Implement LLMAdvisor class
+  - Implement budget tracking & circuit breaker
+  - Add metrics/logging for advisor performance
+  - Test with synthetic edge cases
+
+# Acceptance criteria (for when this is actually built)
+acceptance:
+  - description: "SafeContext sanitization strips URLs"
+    cmd: "echo 'test'"  # Will be real test when implemented
+    manual: true
+
+  - description: "Advisor output matches strict schema"
+    manual: true
+
+  - description: "Circuit breaker disables on high warn rate"
+    manual: true
+
+  - description: "Rules can veto regardless of LLM verdict"
+    manual: true
+
+  - description: "Low-risk actions skip advisor entirely"
+    manual: true
+
+# Deliverables (for when implemented)
+deliverables:
+  - path: ~/AI/arkai-gmail/src/arkai_gmail/critic/advisor.py
+    description: "LLMAdvisor implementation"
+  - path: ~/AI/arkai-gmail/src/arkai_gmail/critic/safe_context.py
+    description: "SafeContext builder with sanitization"
+  - path: ~/AI/arkai-gmail/src/arkai_gmail/critic/budget.py
+    description: "Review budget tracking & circuit breaker"
+
+proofs: {}
+
+risk: |
+  MEDIUM RISK when implemented:
+  - LLM could hallucinate flags (mitigate: flags are advisory only)
+  - Budget exhaustion (mitigate: circuit breaker)
+  - Sanitization bypass (mitigate: strict regex, length caps)
+
+  Current risk: NONE (not implemented yet)
+
+notes: |
+  ## Credit
+  This specification incorporates Chad's steelmanning feedback:
+  1. Safe context with sanitization (not no-context)
+  2. Strict JSON schema output (not freeform)
+  3. Flag-based decisions (not confidence threshold)
+  4. Review budgets & circuit breakers
+  5. Deterministic rules first, LLM additive
+  6. Advisor evaluates only, never proposes
+
+  ## When to Build This
+  Monitor these signals:
+  - Rules-only critic missing important edge cases
+  - Manual review finding patterns rules can't express
+  - Volume exceeding 500 emails/day
+  - Multiple users with different risk tolerances
+
+  Until then, rules-only is sufficient.
