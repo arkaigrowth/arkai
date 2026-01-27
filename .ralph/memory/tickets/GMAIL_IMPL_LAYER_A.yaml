@@ -3,12 +3,12 @@
 # Priority: HIGH (enables all other Gmail work)
 
 id: GMAIL_IMPL_LAYER_A
-worker: triage-sidecar-resumed  # Assigned this session
-status: REVIEW
-blockedBy: []  # GMAIL_SCAFFOLD_V1 is complete
-branch: feat/gmail-layer-a
+worker: triage-sidecar
+status: DONE
+blockedBy: []
+branch: feat/gmail-layer-a  # Pushed to GitHub
 created: 2026-01-26T18:00:00Z
-updated: 2026-01-26T21:30:00Z
+updated: 2026-01-27T03:05:00Z
 
 # Files worker MUST read before starting
 context:
@@ -85,7 +85,12 @@ proofs:
     Shows --limit/-n flag (default: 50)
     Description: "Triage emails from Gmail inbox"
   notimplemented_count: "0"  # grep -c 'NotImplementedError' ingestion.py
-  manual_test: "PENDING - requires user Google Cloud setup"
+  manual_test: |
+    PASSED - 2026-01-27 by master session 3
+    Authenticated as: alexkamysz@gmail.com
+    Fetched 5 emails successfully (Temu, Robinhood, Ohsnap, Julian Goldie)
+    Dry-run displayed table with From, Subject, Received, Labels
+  github_repo: "https://github.com/arkaigrowth/arkai-gmail (private)"
   files_created:
     - src/arkai_gmail/auth.py (OAuth flow implementation)
     - src/arkai_gmail/cli.py (Typer CLI with auth, triage, status, revoke commands)
