@@ -1,0 +1,182 @@
+# Ticket: ElevenLabs TTS for Claudia Voice Responses
+# Worker: voice-builder
+# Priority: MEDIUM (parallel workstream)
+
+id: TTS_ELEVENLABS_V1
+worker: voice-builder
+status: PENDING
+blockedBy: []  # Independent of Gmail work
+branch: feat/tts-elevenlabs
+created: 2026-01-27T07:00:00Z
+updated: 2026-01-27T07:00:00Z
+
+# Context for worker
+context:
+  - .claude/CLAUDE.md                    # Project overview
+  - docs/ARCHITECTURE.md                 # System architecture
+  - TODO.md                              # Has TTS as pending item
+  - src/voice/mod.rs                     # Existing voice module (if any)
+
+# What to build
+task: |
+  Add ElevenLabs TTS capability so Claudia can respond with voice messages.
+
+  ## Use Cases
+  1. Claudia sends voice note responses via Telegram
+  2. Morning briefing read aloud
+  3. Email triage summary spoken
+  4. General "speak this text" capability
+
+  ## Architecture Decision: Where Does TTS Live?
+
+  Option A: In arkai (Rust)
+  - Pro: Native integration, fast
+  - Con: Rust HTTP client complexity
+
+  Option B: Standalone Python script
+  - Pro: Simple, ElevenLabs has good Python SDK
+  - Con: Another runtime
+
+  Option C: In Clawdbot (Go)
+  - Pro: Already handles Telegram voice
+  - Con: Go HTTP client, separate repo
+
+  **Recommendation:** Start with Option B (Python script), can integrate later.
+  Keep it simple: `tts.py <text> --output voice.mp3`
+
+  ## Implementation
+
+  ### Part 1: ElevenLabs Client
+  ```python
+  # tts/elevenlabs_client.py
+  from elevenlabs import generate, set_api_key, voices
+
+  class ElevenLabsTTS:
+      def __init__(self, api_key: str, voice_id: str = "default"):
+          set_api_key(api_key)
+          self.voice_id = voice_id
+
+      def speak(self, text: str, output_path: str) -> str:
+          audio = generate(text=text, voice=self.voice_id)
+          with open(output_path, "wb") as f:
+              f.write(audio)
+          return output_path
+  ```
+
+  ### Part 2: CLI Tool
+  ```bash
+  # Usage
+  arkai-tts "Hello, this is Claudia speaking" --output hello.mp3
+  arkai-tts --stdin < message.txt --output response.mp3
+
+  # With voice selection
+  arkai-tts "Good morning" --voice "Rachel" --output morning.mp3
+  ```
+
+  ### Part 3: Claudia Integration Hook
+  Claudia should be able to call TTS and send the audio via Telegram.
+
+  Option: Webhook endpoint on VPS that:
+  1. Receives text
+  2. Calls ElevenLabs API
+  3. Returns audio file path
+  4. Claudia sends via Telegram voice note
+
+  ### Part 4: Voice Selection
+  - List available voices: `arkai-tts --list-voices`
+  - Set default voice in config
+  - Allow per-call override
+
+  ## API Key Setup
+  1. Sign up at elevenlabs.io
+  2. Get API key from dashboard
+  3. Store in `~/.arkai/secrets/elevenlabs.key` or env var `ELEVENLABS_API_KEY`
+
+  ## Cost Awareness
+  ElevenLabs pricing (as of 2024):
+  - Free tier: 10,000 chars/month
+  - Starter: $5/month for 30,000 chars
+
+  Implement:
+  - Character counting before API call
+  - Warning if approaching limit
+  - Option to use free tier voice
+
+# Acceptance criteria
+acceptance:
+  - description: "CLI tool exists"
+    cmd: "arkai-tts --help"
+    expect: "Usage"
+
+  - description: "Can generate speech from text"
+    cmd: "arkai-tts 'Hello world' --output /tmp/test.mp3 && file /tmp/test.mp3"
+    expect: "audio"
+
+  - description: "Can list voices"
+    cmd: "arkai-tts --list-voices"
+    expect: "Rachel"  # Or whatever default voice
+
+  - description: "Respects ELEVENLABS_API_KEY env var"
+    manual: true
+
+  - description: "Works from VPS (for Claudia)"
+    manual: true
+    description: "SSH to VPS, run tts command, verify audio generated"
+
+# Deliverables
+deliverables:
+  - path: ~/AI/arkai/tts/
+    description: "TTS module (Python)"
+  - path: ~/AI/arkai/tts/elevenlabs_client.py
+    description: "ElevenLabs API wrapper"
+  - path: ~/AI/arkai/tts/cli.py
+    description: "CLI tool"
+  - path: ~/AI/arkai/tts/requirements.txt
+    description: "Python dependencies (elevenlabs)"
+
+proofs: {}
+
+risk: |
+  LOW RISK
+
+  - API key exposure (mitigate: env var, not in code)
+  - Cost overrun (mitigate: character counting, warnings)
+  - Rate limits (mitigate: respect API limits)
+
+  No Gmail/email risk - completely separate workstream.
+
+rollback: |
+  # Just don't use TTS
+  # No system dependencies
+
+notes: |
+  ## ElevenLabs Quick Start
+  ```bash
+  pip install elevenlabs
+  export ELEVENLABS_API_KEY="your-key"
+
+  python -c "
+  from elevenlabs import generate
+  audio = generate('Hello world')
+  with open('hello.mp3', 'wb') as f:
+      f.write(audio)
+  "
+  ```
+
+  ## Integration with Claudia
+  Once TTS works standalone, integration options:
+
+  1. Claudia calls Python script via subprocess (if we enable bash)
+  2. TTS runs as HTTP service, Claudia calls webhook
+  3. TTS output goes to shared folder, Claudia reads
+
+  Start with #3 (simplest) - TTS writes to ~/tts-output/,
+  Claudia watches and sends via Telegram.
+
+  ## Voice Personas
+  Consider creating "Claudia voice" config:
+  - Voice ID: [pick from ElevenLabs]
+  - Stability: 0.5
+  - Similarity boost: 0.75
+
+  Store in config for consistency.
