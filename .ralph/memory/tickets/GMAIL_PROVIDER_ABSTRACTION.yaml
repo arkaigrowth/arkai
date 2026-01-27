@@ -1,0 +1,279 @@
+# Ticket: Gmail LLM Provider Abstraction
+# Worker: triage-sidecar
+# Priority: MEDIUM (enhancement - direct Anthropic works for now)
+
+id: GMAIL_PROVIDER_ABSTRACTION
+worker: triage-sidecar
+status: PENDING
+blockedBy: []  # Can be done in parallel with Layers D-G
+branch: feat/provider-abstraction
+created: 2026-01-27T04:30:00Z
+updated: 2026-01-27T04:30:00Z
+
+# Files worker MUST read before starting
+context:
+  - .claude/CLAUDE.md
+  - docs/ARKAI_GMAIL_DESIGN.md
+  - ~/AI/arkai-gmail/src/arkai_gmail/classify.py   # Current Layer C implementation
+
+# What to do
+task: |
+  Add provider abstraction to Layer C so we can easily switch between LLM providers.
+
+  ## Motivation
+  - Cost optimization: Switch to cheaper providers when budget tight
+  - Resilience: Fallback if one provider is down
+  - Privacy: Use local Ollama for sensitive emails
+  - Centralization: Route through Clawdbot for unified billing
+
+  ## Supported Providers (priority order)
+  1. **anthropic** - Direct Anthropic API (current implementation)
+  2. **openai** - OpenAI API (GPT-4o-mini is cheap and fast)
+  3. **openrouter** - Single key → 200+ models
+  4. **clawdbot** - Route through Claudia's gateway (free, centralized)
+  5. **ollama** - Local models (free, private)
+
+  ## Part 1: Provider Interface
+  Create `src/arkai_gmail/llm/base.py`:
+  ```python
+  from abc import ABC, abstractmethod
+  from typing import Optional
+  from ..models import ClassificationResult
+
+  class LLMProvider(ABC):
+      """Base class for all LLM providers."""
+
+      @abstractmethod
+      async def classify(self, email_content: str, system_prompt: str) -> ClassificationResult:
+          """Classify an email and return structured result."""
+          pass
+
+      @abstractmethod
+      async def health_check(self) -> bool:
+          """Check if provider is available. Used for fallback logic."""
+          pass
+
+      @property
+      @abstractmethod
+      def name(self) -> str:
+          """Provider identifier for logging."""
+          pass
+
+      @property
+      def cost_per_1k_tokens(self) -> Optional[float]:
+          """Approximate cost for budget tracking. None if free/unknown."""
+          return None
+  ```
+
+  ## Part 2: Configuration
+  Create/extend `~/.arkai-gmail/config.yaml`:
+  ```yaml
+  # LLM Provider Configuration
+  llm:
+    # Active provider (override with LLM_PROVIDER env var)
+    provider: anthropic
+
+    # Optional: fallback chain if primary fails
+    fallback_chain: [openrouter, ollama]
+
+    # Provider-specific settings
+    providers:
+      anthropic:
+        api_key_env: ANTHROPIC_API_KEY
+        model: claude-sonnet-4-20250514
+        max_tokens: 1024
+
+      openai:
+        api_key_env: OPENAI_API_KEY
+        model: gpt-4o-mini
+        max_tokens: 1024
+
+      openrouter:
+        api_key_env: OPENROUTER_API_KEY
+        model: anthropic/claude-3-haiku
+        max_tokens: 1024
+
+      clawdbot:
+        endpoint_env: CLAWDBOT_ENDPOINT
+        token_env: CLAWDBOT_TOKEN
+        # Default: https://arkai-clawdbot.taila30487.ts.net/hooks/agent
+
+      ollama:
+        endpoint: http://localhost:11434
+        model: llama3.2
+  ```
+
+  ## Part 3: Provider Implementations
+  Create one file per provider in `src/arkai_gmail/llm/`:
+
+  ```
+  src/arkai_gmail/llm/
+  ├── __init__.py          # Exports get_provider()
+  ├── base.py              # LLMProvider ABC
+  ├── factory.py           # get_provider(config) -> LLMProvider
+  ├── anthropic.py         # AnthropicProvider
+  ├── openai.py            # OpenAIProvider
+  ├── openrouter.py        # OpenRouterProvider
+  ├── clawdbot.py          # ClawdbotProvider (HTTP webhook)
+  └── ollama.py            # OllamaProvider
+  ```
+
+  ## Part 4: Factory Pattern
+  Create `src/arkai_gmail/llm/factory.py`:
+  ```python
+  import os
+  from typing import Optional
+  from .base import LLMProvider
+
+  def get_provider(config: dict, override: Optional[str] = None) -> LLMProvider:
+      """
+      Get LLM provider based on config and environment.
+
+      Priority:
+      1. override parameter (for testing)
+      2. LLM_PROVIDER env var
+      3. config['llm']['provider']
+      4. Default: 'anthropic'
+      """
+      provider_name = override or os.getenv('LLM_PROVIDER') or config.get('llm', {}).get('provider', 'anthropic')
+      provider_config = config.get('llm', {}).get('providers', {}).get(provider_name, {})
+
+      match provider_name:
+          case 'anthropic':
+              from .anthropic import AnthropicProvider
+              return AnthropicProvider(provider_config)
+          case 'openai':
+              from .openai import OpenAIProvider
+              return OpenAIProvider(provider_config)
+          case 'openrouter':
+              from .openrouter import OpenRouterProvider
+              return OpenRouterProvider(provider_config)
+          case 'clawdbot':
+              from .clawdbot import ClawdbotProvider
+              return ClawdbotProvider(provider_config)
+          case 'ollama':
+              from .ollama import OllamaProvider
+              return OllamaProvider(provider_config)
+          case _:
+              raise ValueError(f"Unknown LLM provider: {provider_name}")
+  ```
+
+  ## Part 5: Update Layer C
+  Refactor `classify.py` to use provider abstraction:
+  ```python
+  # Before
+  client = Anthropic()
+  response = client.messages.create(...)
+
+  # After
+  provider = get_provider(config)
+  result = await provider.classify(email_content, system_prompt)
+  ```
+
+  ## Part 6: CLI Integration
+  Add provider info to CLI output:
+  ```bash
+  $ arkai-gmail triage --dry-run --classify --limit 3
+  Using LLM provider: anthropic (claude-sonnet-4-20250514)
+  ...
+
+  $ LLM_PROVIDER=ollama arkai-gmail triage --dry-run --classify --limit 3
+  Using LLM provider: ollama (llama3.2 @ localhost:11434)
+  ...
+  ```
+
+# Machine-checkable acceptance criteria
+acceptance:
+  - description: "Provider base class exists"
+    cmd: "test -f ~/AI/arkai-gmail/src/arkai_gmail/llm/base.py && echo 'exists'"
+    expect: "exists"
+
+  - description: "Factory function exists"
+    cmd: "grep -c 'def get_provider' ~/AI/arkai-gmail/src/arkai_gmail/llm/factory.py"
+    expect: "1"
+
+  - description: "Anthropic provider implemented"
+    cmd: "grep -c 'class AnthropicProvider' ~/AI/arkai-gmail/src/arkai_gmail/llm/anthropic.py"
+    expect: "1"
+
+  - description: "At least 3 providers implemented"
+    cmd: "ls ~/AI/arkai-gmail/src/arkai_gmail/llm/*.py | grep -v __init__ | grep -v base | grep -v factory | wc -l | tr -d ' '"
+    expect_gte: 3
+
+  - description: "LLM_PROVIDER env var works"
+    manual: true
+    description: "Run with LLM_PROVIDER=anthropic and LLM_PROVIDER=ollama, both should work"
+
+  - description: "Config file supports provider selection"
+    cmd: "grep -c 'provider:' ~/.arkai-gmail/config.yaml"
+    expect_gte: 1
+
+# Expected outputs
+deliverables:
+  - path: ~/AI/arkai-gmail/src/arkai_gmail/llm/
+    description: "Provider abstraction module with factory pattern"
+  - path: ~/AI/arkai-gmail/src/arkai_gmail/llm/base.py
+    description: "LLMProvider ABC"
+  - path: ~/AI/arkai-gmail/src/arkai_gmail/llm/factory.py
+    description: "get_provider() factory function"
+  - path: ~/AI/arkai-gmail/src/arkai_gmail/llm/anthropic.py
+    description: "Anthropic provider (refactored from current classify.py)"
+  - path: ~/AI/arkai-gmail/src/arkai_gmail/llm/openai.py
+    description: "OpenAI provider"
+  - path: ~/AI/arkai-gmail/src/arkai_gmail/llm/openrouter.py
+    description: "OpenRouter provider"
+  - path: ~/AI/arkai-gmail/src/arkai_gmail/llm/clawdbot.py
+    description: "Clawdbot webhook provider"
+  - path: ~/AI/arkai-gmail/src/arkai_gmail/llm/ollama.py
+    description: "Ollama local provider"
+
+# Worker fills these in when complete
+proofs: {}
+
+# Risk assessment
+risk: |
+  LOW RISK - This is a refactor with clear boundaries.
+
+  Risks:
+  - Breaking existing classify.py (mitigate: keep old code until new works)
+  - Different providers return slightly different formats (mitigate: normalize in provider)
+  - Async complexity (mitigate: use anyio for compatibility)
+
+  Dependencies:
+  - anthropic (already installed)
+  - openai (pip install openai)
+  - httpx (for clawdbot/ollama, already have)
+
+rollback: |
+  # Revert to direct Anthropic implementation
+  git checkout HEAD -- ~/AI/arkai-gmail/src/arkai_gmail/classify.py
+
+  # Remove provider module
+  rm -rf ~/AI/arkai-gmail/src/arkai_gmail/llm/
+
+# Notes
+notes: |
+  ## Implementation Order (recommended)
+  1. Create base.py with ABC
+  2. Create factory.py with skeleton
+  3. Refactor anthropic.py from existing classify.py
+  4. Test that existing functionality still works
+  5. Add openai.py (similar to anthropic)
+  6. Add openrouter.py (same API shape as openai)
+  7. Add clawdbot.py (HTTP POST, different shape)
+  8. Add ollama.py (HTTP POST to local endpoint)
+
+  ## Clawdbot Provider Notes
+  Clawdbot endpoint: https://arkai-clawdbot.taila30487.ts.net/hooks/agent
+  Token: stored in CLAWDBOT_TOKEN env var
+
+  The webhook expects a specific payload format - check Claudia's docs.
+  Response will be text that needs to be parsed into ClassificationResult.
+
+  ## OpenRouter Notes
+  OpenRouter uses OpenAI-compatible API, so openrouter.py can extend openai.py
+  Just change the base_url to https://openrouter.ai/api/v1
+
+  ## Testing Without API Keys
+  For providers without keys configured, health_check() should return False
+  and get_provider() should warn but not crash.
