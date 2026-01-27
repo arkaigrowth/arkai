@@ -17,8 +17,10 @@
 //! ```
 
 pub mod queue;
+pub mod transcriber;
 pub mod watcher;
 
 // Re-export key types
 pub use queue::{QueueItem, VoiceQueue, VoiceQueueError};
+pub use transcriber::{transcribe, TranscriptResult};
 pub use watcher::{AudioFileEvent, VoiceMemoWatcher, WatcherConfig};
