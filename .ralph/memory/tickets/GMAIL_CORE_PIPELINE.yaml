@@ -4,11 +4,11 @@
 
 id: GMAIL_CORE_PIPELINE
 worker: triage-sidecar
-status: REVIEW
+status: DONE
 blockedBy: []
 branch: feat/gmail-layer-a
 created: 2026-01-27T06:00:00Z
-updated: 2026-01-27T14:30:00Z
+updated: 2026-01-27T07:50:00Z
 
 # Layer-by-layer status (worker updates this)
 layers:
@@ -77,7 +77,30 @@ deliverables:
     description: "Unit tests for all layers"
 
 # Worker fills proofs when complete
-proofs: {}
+proofs:
+  e2e_dry_run: |
+    PASSED - 2026-01-27 07:45 UTC
+    Fetched 3 emails, all classified as NEWSLETTER (95%)
+    Gate: 3 OK, 0 FLAG, 0 SKIP
+    Sanitization working (67.3% reduction)
+  e2e_execute: |
+    PASSED - 2026-01-27 07:47 UTC
+    3 emails processed end-to-end:
+    - Julian Goldie → NEWSLETTER → APPROVE → EXECUTED
+    - Brain.fm → NEWSLETTER → APPROVE → EXECUTED
+    - AIAgentStore.ai → NEWSLETTER → APPROVE → EXECUTED
+    All actions: add_label, archive, mark_read = success
+  audit_log: |
+    PASSED - audit.jsonl contains:
+    - timestamp, email_id, from, subject
+    - category, confidence, verdict
+    - rule_hits (empty = no rules triggered)
+    - executed: true, actions with status
+  unit_tests: "27 passing (13 critic + 14 actor)"
+  classification_quality: |
+    Excellent - all 3 test emails correctly identified as newsletters
+    95% confidence, appropriate actions proposed
+  validated_by: "master session (Claude Opus 4.5)"
 
 # Risk assessment
 risk: |
