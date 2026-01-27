@@ -4,42 +4,42 @@
 
 id: GMAIL_CORE_PIPELINE
 worker: triage-sidecar
-status: IN_PROGRESS
+status: REVIEW
 blockedBy: []
-branch: feat/gmail-layers  # Or whatever branch they're using
+branch: feat/gmail-layer-a
 created: 2026-01-27T06:00:00Z
-updated: 2026-01-27T06:00:00Z
+updated: 2026-01-27T14:30:00Z
 
 # Layer-by-layer status (worker updates this)
 layers:
   A_INGESTION:
     status: DONE
     tests: E2E
-    notes: "OAuth + Gmail fetch working"
+    notes: "OAuth + Gmail fetch with history API"
   B_GATE:
     status: DONE
     tests: E2E
-    notes: "Pre-AI filtering (spam, newsletters)"
+    notes: "Pre-AI filtering, sanitization"
   C_READER:
     status: DONE
     tests: E2E
-    notes: "LLM classification with structured output"
+    notes: "Claude classification with structured JSON output"
   D_CRITIC:
     status: DONE
     tests: 13 unit
-    notes: "Rules-only, typed rules, SQLite rate limits"
+    notes: "Typed rules, SQLite rate limits, RuleEngine"
   E_ACTOR:
     status: DONE
     tests: 14 unit
-    notes: "Gmail executor with dry_run default, safety checks"
+    notes: "Gmail executor, dry_run=True default, safety checks"
   F_MEMORY:
-    status: PENDING
-    tests: null
-    notes: "Can stub for MVP - learned preferences"
+    status: DONE
+    tests: stub
+    notes: "Pass-through stub - returns empty defaults"
   G_AUDIT:
-    status: PENDING
-    tests: null
-    notes: "Event logging - needed for debugging"
+    status: DONE
+    tests: minimal
+    notes: "JSONL logger at ~/.arkai-gmail/audit.jsonl"
 
 # Context files
 context:
