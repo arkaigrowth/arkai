@@ -1,10 +1,34 @@
 ---
 created: 2026-01-29
 purpose: Resume prompt for Phase 4 build session (Track B - VPS/clawd)
-depends_on: Phase 1 + 1.5 complete, Phase 3 schemas (can inline temporarily)
+depends_on: Phase 1 + 1.5 + 1.6 complete, Phase 3 schemas (can inline temporarily)
+ticket: VOICE_PHASE_4
 ---
 
 # Phase 4 - VPS Voice Runner (Track B)
+
+## ⚠️ WORKER PROTOCOL - READ FIRST
+
+You are a **worker session** executing ticket `VOICE_PHASE_4`.
+
+### Before Starting
+1. Read `.claude/CLAUDE.md` (project overview + worker protocol)
+2. Read your ticket: `.ralph/memory/tickets/VOICE_PHASE_4.yaml`
+3. Verify you're on branch: `voice/track-b-phase4`
+4. Read all files in ticket's `context` section
+
+### When Complete
+1. Fill in `proofs` section of ticket with command outputs
+2. Set ticket `status: REVIEW`
+3. Update `updated` timestamp
+4. Commit and push branch
+5. Signal: "Ticket VOICE_PHASE_4 ready for review"
+
+### VPS Note
+Most work is on VPS via SSH. Ticket file stays in local repo. Update ticket
+from local machine after VPS work is complete.
+
+---
 
 ## Context
 
@@ -14,6 +38,8 @@ You are building the VPS-side voice runner daemon. This runs on `clawdbot-vps` (
 ```
 .ralph/memory/specs/VOICE_PIPELINE_V2.1_BUILD_SPEC.md
 ```
+
+**Your ticket has machine-checkable acceptance criteria. Verify each one passes.**
 
 **VPS Access:**
 ```bash
@@ -334,6 +360,37 @@ pip3 install groq openai watchdog aiofiles jsonschema
 - No arbitrary shell execution
 - JSONL audit logging on every action
 - Schema validation on all requests/results (when Phase 3 schemas ready)
+
+---
+
+## Completion Checklist
+
+Before marking ticket as REVIEW:
+
+```bash
+# 1. Verify VPS setup (from local machine)
+ssh clawdbot-vps 'ls -d ~/clawd/artifacts/voice/{requests,results,audio-cache}'
+ssh clawdbot-vps 'test -f ~/clawd/services/voice/vps_voice_runner.py && echo exists'
+ssh clawdbot-vps 'python3 -c "import sys; sys.path.insert(0, \"/home/clawdbot/clawd/services/voice\"); import vps_voice_runner" 2>&1'
+ssh clawdbot-vps 'test -f ~/.config/systemd/user/vps-voice-runner.service && echo exists'
+
+# 2. Run test request
+ssh clawdbot-vps 'echo "{\"id\":\"verify-001\",\"action\":\"process\",\"params\":{\"limit\":1}}" > ~/clawd/artifacts/voice/requests/verify-001.json'
+sleep 5
+ssh clawdbot-vps 'cat ~/clawd/artifacts/voice/results/verify-001.json 2>/dev/null || echo "no result yet"'
+ssh clawdbot-vps 'tail -5 ~/clawd/artifacts/voice/audit.jsonl'
+
+# 3. Update ticket (local machine)
+# Edit .ralph/memory/tickets/VOICE_PHASE_4.yaml:
+#   - Fill proofs section with command outputs
+#   - Set status: REVIEW
+#   - Update: updated timestamp
+
+# 4. Commit and push
+git add .ralph/memory/tickets/VOICE_PHASE_4.yaml
+git commit -m "chore: mark VOICE_PHASE_4 ready for review"
+git push origin voice/track-b-phase4
+```
 
 ---
 

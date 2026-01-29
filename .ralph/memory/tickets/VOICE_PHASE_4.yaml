@@ -1,0 +1,201 @@
+# Ticket: Voice Pipeline Phase 4 - VPS Voice Runner
+# Worker: track-b
+# Priority: HIGH (parallel with Phase 2+3)
+
+id: VOICE_PHASE_4
+worker: track-b
+status: IN_PROGRESS
+blockedBy: []  # Can start now, will need schemas from VOICE_PHASE_2_3 for validation
+branch: voice/track-b-phase4
+created: 2026-01-29T03:30:00Z
+updated: 2026-01-29T03:30:00Z
+
+# Files worker MUST read before starting
+context:
+  - .claude/CLAUDE.md                                    # Project overview + worker protocol
+  - .ralph/memory/specs/VOICE_PIPELINE_V2.1_BUILD_SPEC.md  # Master spec
+  - .ralph/memory/prompts/PHASE_4_VPS_BUILD_SESSION.md   # Session prompt (detailed)
+  - docs/ARCHITECTURE.md                                  # VPS layer details
+
+# What to do
+task: |
+  Build the VPS-side voice runner daemon that processes voice requests via Whisper API.
+
+  ## VPS Access
+  ```bash
+  ssh clawdbot-vps  # or ssh 100.81.12.50 (Tailscale)
+  ```
+
+  ## Key Decisions (Already Made)
+  - Use Whisper API, NOT local Whisper (VPS has no GPU)
+  - Groq primary (free tier), OpenAI fallback ($0.006/min)
+  - Owns ~/clawd/artifacts/voice/
+  - JSONL audit logging on every action
+
+  ## Build Order
+
+  ### Step 1: Directory Setup (one-time)
+  ```bash
+  ssh clawdbot-vps "mkdir -p ~/clawd/artifacts/voice/{requests,results,audio-cache}"
+  ssh clawdbot-vps "mkdir -p ~/clawd/services/voice"
+  ```
+
+  ### Step 2: Create VPS Voice Runner Daemon
+  Location: ~/clawd/services/voice/vps_voice_runner.py
+
+  Features:
+  - Watchdog file watcher for ~/clawd/artifacts/voice/requests/
+  - Process requests: transcribe via Groq (primary) or OpenAI (fallback)
+  - Write results to ~/clawd/artifacts/voice/results/
+  - JSONL audit log at ~/clawd/artifacts/voice/audit.jsonl
+  - Async processing with aiofiles
+
+  ### Step 3: Systemd Service
+  Create: ~/.config/systemd/user/vps-voice-runner.service
+  - Type=simple
+  - Restart=on-failure
+  - Environment vars for API keys
+
+  ### Step 4: Test
+  ```bash
+  # Create test request
+  echo '{"id":"test-001","action":"process","params":{"limit":1}}' > \
+    ~/clawd/artifacts/voice/requests/test-001.json
+
+  # Watch for result
+  cat ~/clawd/artifacts/voice/results/test-001.json
+
+  # Check audit log
+  tail ~/clawd/artifacts/voice/audit.jsonl
+  ```
+
+  ## Schema Validation (Sync Point)
+  When VOICE_PHASE_2_3 completes:
+  1. Pull contracts/voice_request.schema.json and voice_result.schema.json
+  2. Copy to VPS or import from repo
+  3. Add validation calls in process_request()
+
+  If Phase 2+3 not done yet: use inline schema or skip validation temporarily.
+
+# Machine-checkable acceptance criteria
+acceptance:
+  - description: "Directory structure exists on VPS"
+    cmd: "ssh clawdbot-vps 'ls -d ~/clawd/artifacts/voice/{requests,results,audio-cache}'"
+    expect: "requests"
+
+  - description: "Runner script exists and is executable"
+    cmd: "ssh clawdbot-vps 'test -f ~/clawd/services/voice/vps_voice_runner.py && echo exists'"
+    expect: "exists"
+
+  - description: "Runner imports without error"
+    cmd: "ssh clawdbot-vps 'cd ~/clawd/services/voice && python3 -c \"import vps_voice_runner\" 2>&1 || echo import_failed'"
+    expect_not: "import_failed"
+    expect_not: "ModuleNotFoundError"
+
+  - description: "Systemd service file exists"
+    cmd: "ssh clawdbot-vps 'test -f ~/.config/systemd/user/vps-voice-runner.service && echo exists'"
+    expect: "exists"
+
+  - description: "Service can be enabled (dry run)"
+    cmd: "ssh clawdbot-vps 'systemctl --user cat vps-voice-runner.service 2>&1 | head -1'"
+    expect: "[Unit]"
+
+  - description: "Test request produces result"
+    manual: true
+    description: |
+      1. Create test request JSON
+      2. Run daemon manually: python3 vps_voice_runner.py
+      3. Verify result JSON created
+      4. Verify audit.jsonl has entries
+
+  - description: "Groq transcription works (if API key set)"
+    manual: true
+    description: "Transcribe test audio, verify transcript returned"
+
+# Expected outputs (on VPS)
+deliverables:
+  - path: ~/clawd/services/voice/vps_voice_runner.py
+    description: "Main daemon script"
+    location: VPS
+  - path: ~/clawd/services/voice/paths.py
+    description: "Path constants (copy from Phase 2+3 or inline)"
+    location: VPS
+    optional: true
+  - path: ~/.config/systemd/user/vps-voice-runner.service
+    description: "Systemd user service file"
+    location: VPS
+  - path: ~/clawd/artifacts/voice/requests/
+    description: "Directory for incoming requests"
+    location: VPS
+  - path: ~/clawd/artifacts/voice/results/
+    description: "Directory for results"
+    location: VPS
+  - path: ~/clawd/artifacts/voice/audit.jsonl
+    description: "Audit log (created on first run)"
+    location: VPS
+
+# Worker fills these in when complete
+proofs:
+  directory_setup: ""
+  runner_syntax_check: ""
+  systemd_service_created: ""
+  test_request_result: ""
+  audit_log_sample: ""
+  groq_test: ""  # Optional if no test audio
+
+# Risk assessment
+risk: |
+  API KEYS: GROQ_API_KEY and OPENAI_API_KEY must be set in environment.
+  If missing, transcription will fail. Runner should log clear error.
+
+  NO GPU: VPS is ARM64 with no GPU. Local Whisper would be 30-60s per minute
+  of audio. API-based approach is correct.
+
+  WATCHDOG DEPENDENCY: Uses python-watchdog. Must be installed:
+  pip3 install watchdog aiofiles groq openai jsonschema
+
+  AUDIO FILES: Expects .ogg files in TELEGRAM_INBOUND. If format changes,
+  need to update supported extensions.
+
+rollback: |
+  If daemon crashes:
+    systemctl --user stop vps-voice-runner
+    # Debug, fix, restart
+
+  If bad results written:
+    rm ~/clawd/artifacts/voice/results/*.json
+    # Reprocess requests
+
+  If audit log corrupted:
+    mv ~/clawd/artifacts/voice/audit.jsonl audit.jsonl.bak
+    # Fresh log on next run
+
+# Dependencies
+dependencies:
+  python_packages:
+    - watchdog
+    - aiofiles
+    - groq
+    - openai
+    - jsonschema
+  env_vars:
+    - GROQ_API_KEY
+    - OPENAI_API_KEY
+
+# Sync point with Phase 2+3
+sync_notes: |
+  This ticket can start immediately but needs schemas from VOICE_PHASE_2_3.
+
+  Options:
+  1. Inline validation schemas temporarily → swap when Phase 2+3 merges
+  2. Skip validation initially → add after Phase 2+3 merges
+  3. Wait for Phase 2+3 to commit schemas first (slower but cleaner)
+
+  Recommended: Start building, skip schema validation. Add validation as
+  final step after Phase 2+3 schemas are available.
+
+protected_files:
+  - docs/ARCHITECTURE.md
+  - .claude/CLAUDE.md
+
+error: null
