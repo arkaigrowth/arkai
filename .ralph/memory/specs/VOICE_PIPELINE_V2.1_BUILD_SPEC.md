@@ -542,4 +542,40 @@ clawdbot nodes run --node "Mac-Diarizer" -- python3 ~/services/voice/diarize.py 
 
 ---
 
+## 11. Implementation Notes (Post-Build Learnings)
+
+> Added after Phase 4 build. Documents what we learned, not changing requirements.
+
+### Phase 4 Simplifications (Approved)
+
+| Spec Proposed | Implemented | Rationale |
+|---------------|-------------|-----------|
+| watchdog file watcher | 1s polling loop | Matches existing `tts-watcher.py` pattern. Simpler, fewer deps, same latency. |
+| async with aiofiles | sync I/O | Groq/OpenAI clients are synchronous; async wrapper added complexity without benefit. |
+| Transcript refs in result | Full transcript inline | Prevents data loss. Can optimize to refs later if results get large. |
+
+### Additional Robustness (Added)
+
+- **Atomic claim**: Requests moved to `.inflight/` directory during processing. Prevents double-processing on crashes or races.
+- **Idempotency**: Skip if result already exists with `status=completed`.
+- **Crash recovery**: On startup, any files in `.inflight/` are moved back to `requests/` for reprocessing.
+- **Bounded retries**: 3 attempts per provider with 2s delay between retries.
+- **Fail-fast startup**: Daemon exits immediately if no API keys configured (clear error vs. silent failure).
+
+### API Key Security
+
+Keys stored in `~/clawd/services/voice/.env` with `chmod 600`, loaded via systemd `EnvironmentFile=` directive. Never committed to git.
+
+### Audio Retention Policy
+
+| Location | Owner | Retention | Voice Pipeline Role |
+|----------|-------|-----------|---------------------|
+| `~/.clawdbot/media/inbound/` | Clawdbot | Clawdbot policy | Read-only (don't delete) |
+| `~/clawd/artifacts/voice/audio-cache/` | Voice pipeline | 24h auto-cleanup | Temp processing only |
+| Mac Voice Memos | Apple/User | User decision | Read-only |
+
+**Principle**: We're a processor, not the source of truth for audio. Source systems own retention decisions.
+
+---
+
 *This spec is FROZEN. Start building.*
