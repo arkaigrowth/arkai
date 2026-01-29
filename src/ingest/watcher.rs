@@ -133,6 +133,9 @@ impl VoiceMemoWatcher {
     pub async fn scan_once(&self, queue: &VoiceQueue) -> Result<ScanResult> {
         self.config.validate().map_err(|e| anyhow::anyhow!("{}", e))?;
 
+        // Phase 1.6: Check ffprobe availability upfront (fail fast, not silent failures)
+        check_ffprobe_available().await?;
+
         let mut result = ScanResult::default();
 
         let mut entries = tokio::fs::read_dir(&self.config.watch_path).await?;
@@ -161,7 +164,8 @@ impl VoiceMemoWatcher {
             if let Ok(mtime) = metadata.modified() {
                 if let Ok(age) = mtime.elapsed() {
                     if age < std::time::Duration::from_secs(MIN_FILE_AGE_SECS) {
-                        tracing::debug!("Skipped (too recent, age={:.1}s): {}", age.as_secs_f32(), path.display());
+                        // Phase 1.6: Report deferred files, don't silently skip
+                        tracing::info!("Deferred (too recent, age={:.1}s): {}", age.as_secs_f32(), path.display());
                         result.deferred += 1;
                         continue;
                     }
@@ -288,10 +292,10 @@ impl ScanResult {
 }
 
 /// Stability tracking for a pending file
-/// Implements Chad's hardening requirements:
+/// Implements Chad's hardening requirements (Phase 1.6):
 /// - Size + mtime unchanged for stability_delay
 /// - Minimum age since first seen
-/// - Multiple consecutive stable checks
+/// - At least 3 consecutive stable checks with 2s minimum between each
 #[derive(Debug, Clone)]
 struct FileStabilityState {
     /// File size at last check
@@ -304,6 +308,8 @@ struct FileStabilityState {
     last_changed: Instant,
     /// Number of consecutive stable checks passed
     stable_checks: u32,
+    /// When we last recorded a stable check (for 2s minimum enforcement)
+    last_stable_check: Option<Instant>,
 }
 
 impl FileStabilityState {
@@ -315,6 +321,7 @@ impl FileStabilityState {
             first_seen: now,
             last_changed: now,
             stable_checks: 0,
+            last_stable_check: None,
         }
     }
 
@@ -326,6 +333,7 @@ impl FileStabilityState {
             self.mtime = new_mtime;
             self.last_changed = Instant::now();
             self.stable_checks = 0;
+            self.last_stable_check = None; // Reset timing enforcement on change
             true
         } else {
             false
@@ -333,10 +341,10 @@ impl FileStabilityState {
     }
 
     /// Check if file is stable enough for processing
-    /// Requirements:
+    /// Requirements (Phase 1.6 hardened):
     /// - No changes for stability_delay
     /// - Minimum age of 30 seconds since first seen
-    /// - At least 2 consecutive stable checks
+    /// - At least 3 consecutive stable checks with 2s minimum between each
     fn is_stable(&self, stability_delay: Duration, min_age: Duration) -> bool {
         let now = Instant::now();
         let time_since_change = now.duration_since(self.last_changed);
@@ -344,18 +352,31 @@ impl FileStabilityState {
 
         time_since_change >= stability_delay
             && age >= min_age
-            && self.stable_checks >= 2
+            && self.stable_checks >= 3 // Changed from 2 to 3 per Phase 1.6
     }
 
     /// Record a stable check (size/mtime unchanged)
-    fn record_stable_check(&mut self) {
+    /// Returns true if check was recorded, false if too soon (< 2s since last check)
+    fn record_stable_check(&mut self) -> bool {
+        let now = Instant::now();
+
+        // Enforce 2s minimum between stable checks (Phase 1.6)
+        if let Some(last) = self.last_stable_check {
+            if now.duration_since(last) < Duration::from_secs(2) {
+                return false; // Too soon, don't count this check
+            }
+        }
+
+        self.last_stable_check = Some(now);
         self.stable_checks += 1;
+        true
     }
 
     /// Reset for retry after a deferral
     fn reset_for_retry(&mut self) {
         self.last_changed = Instant::now();
         self.stable_checks = 0;
+        self.last_stable_check = None;
     }
 }
 
@@ -366,6 +387,9 @@ async fn run_watcher(
     event_tx: mpsc::Sender<AudioFileEvent>,
     stop_rx: &mut mpsc::Receiver<()>,
 ) -> Result<()> {
+    // Phase 1.6: Check ffprobe availability at startup (fail fast, not infinite defer)
+    check_ffprobe_available().await?;
+
     // Track files being stabilized with enhanced state
     let mut pending: HashMap<PathBuf, FileStabilityState> = HashMap::new();
 
@@ -544,6 +568,23 @@ fn is_qta_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Check if ffprobe is available (Phase 1.6 hardening)
+/// Called at startup to fail fast instead of infinite defer loop
+async fn check_ffprobe_available() -> Result<()> {
+    match tokio::process::Command::new("ffprobe")
+        .arg("-version")
+        .output()
+        .await
+    {
+        Ok(out) if out.status.success() => Ok(()),
+        Ok(_) => anyhow::bail!("ffprobe found but returned error. Verify ffmpeg installation."),
+        Err(e) => anyhow::bail!(
+            "ffprobe not found: {}. Install ffmpeg to process .qta files: brew install ffmpeg",
+            e
+        ),
+    }
+}
+
 /// Validate that an audio file is readable using ffprobe
 /// Returns false if ffprobe fails (file likely still syncing)
 async fn validate_audio_readable(path: &Path) -> bool {
@@ -585,10 +626,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_scan_once() {
+    async fn test_scan_once_defers_fresh_files() {
+        // Phase 1.6: Fresh files (< 30s old) should be deferred, not processed
         let temp = TempDir::new().unwrap();
 
-        // Create test files
+        // Create test files (brand new, age < 30s)
         let audio1 = temp.path().join("test1.m4a");
         let audio2 = temp.path().join("test2.m4a");
         let other = temp.path().join("test.txt");
@@ -608,16 +650,63 @@ mod tests {
         let queue_path = temp.path().join("queue.jsonl");
         let queue = VoiceQueue::new(queue_path);
 
-        // Scan
+        // Scan - fresh files should be deferred (Phase 1.6 hardening)
         let result = watcher.scan_once(&queue).await.unwrap();
 
-        assert_eq!(result.new_files, 2);
+        // Fresh files are deferred, not queued
+        assert_eq!(result.deferred, 2, "Fresh files should be deferred");
+        assert_eq!(result.new_files, 0, "No files should be queued immediately");
         assert_eq!(result.already_queued, 0);
+    }
+
+    #[tokio::test]
+    async fn test_scan_once_processes_old_files() {
+        // Test that files older than MIN_FILE_AGE_SECS get processed
+        // This requires backdating file mtimes
+        use filetime::{set_file_mtime, FileTime};
+
+        let temp = TempDir::new().unwrap();
+
+        // Create test files
+        let audio1 = temp.path().join("test1.m4a");
+        let audio2 = temp.path().join("test2.m4a");
+
+        tokio::fs::write(&audio1, b"audio 1 content").await.unwrap();
+        tokio::fs::write(&audio2, b"audio 2 content").await.unwrap();
+
+        // Backdate files to 60 seconds ago (past MIN_FILE_AGE_SECS of 30s)
+        let old_time = FileTime::from_unix_time(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64
+                - 60,
+            0,
+        );
+        set_file_mtime(&audio1, old_time).unwrap();
+        set_file_mtime(&audio2, old_time).unwrap();
+
+        // Create watcher and queue
+        let config = WatcherConfig {
+            watch_path: temp.path().to_path_buf(),
+            stability_delay_secs: 1,
+            extensions: vec!["m4a".to_string()],
+        };
+        let watcher = VoiceMemoWatcher::with_config(config);
+
+        let queue_path = temp.path().join("queue.jsonl");
+        let queue = VoiceQueue::new(queue_path);
+
+        // Scan - old files should be processed
+        let result = watcher.scan_once(&queue).await.unwrap();
+
+        assert_eq!(result.new_files, 2, "Old files should be queued");
+        assert_eq!(result.deferred, 0, "No files should be deferred");
 
         // Scan again - should be idempotent
         let result2 = watcher.scan_once(&queue).await.unwrap();
 
-        assert_eq!(result2.new_files, 0);
-        assert_eq!(result2.already_queued, 2);
+        assert_eq!(result2.new_files, 0, "Already processed files shouldn't be re-queued");
+        assert_eq!(result2.already_queued, 2, "Files should show as already queued");
     }
 }

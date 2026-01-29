@@ -1,7 +1,8 @@
 ---
 created: 2026-01-29
 purpose: Chad's Phase 1.6 hardening requirements (do BEFORE parallel tracks)
-status: PENDING
+status: DONE
+completed: 2026-01-29
 ---
 
 # Phase 1.6 Hardening (Chad's Feedback)
@@ -77,23 +78,40 @@ fn check_ffprobe_available() -> Result<()> {
 
 ## Acceptance Criteria
 
-- [ ] scan_once logs each deferred file with reason
-- [ ] stable_checks >= 3 with 2s minimum between checks
-- [ ] ffprobe missing causes startup error, not infinite defer loop
+- [x] scan_once logs each deferred file with reason
+- [x] stable_checks >= 3 with 2s minimum between checks
+- [x] ffprobe missing causes startup error, not infinite defer loop
 
-## Test
+## Test Results (2026-01-29)
 
+### Test 1: Deferred file logging
 ```bash
-# Test 1: Create a "young" file, run scan, verify it's reported as deferred
-touch /tmp/test.qta
-arkai voice scan --path /tmp  # Should show "Deferred (too recent)"
-
-# Test 2: Remove ffprobe temporarily
-sudo mv /opt/homebrew/bin/ffprobe /opt/homebrew/bin/ffprobe.bak
-arkai voice watch  # Should error: "ffprobe not found"
-sudo mv /opt/homebrew/bin/ffprobe.bak /opt/homebrew/bin/ffprobe
+$ echo "test" > /tmp/arkai-test-voice/fresh-test.m4a
+$ RUST_LOG=info arkai voice scan --path /tmp/arkai-test-voice
+📂 Scanning: /tmp/arkai-test-voice
+INFO Deferred (too recent, age=0.3s): /tmp/arkai-test-voice/fresh-test.m4a
+  Deferred (syncing):  1
 ```
+✅ **PASS**: Deferred files now logged with reason
+
+### Test 2: ffprobe missing error
+```bash
+$ PATH=/bin:/usr/bin arkai voice scan --path /tmp/arkai-test-voice
+Error: ffprobe not found: No such file or directory (os error 2). Install ffmpeg to process .qta files: brew install ffmpeg
+```
+✅ **PASS**: Hard startup error instead of infinite defer loop
+
+### Test 3: Unit tests
+```bash
+$ cargo test watcher
+running 4 tests
+test ingest::watcher::tests::test_default_voice_memos_path ... ok
+test ingest::watcher::tests::test_config_extensions ... ok
+test ingest::watcher::tests::test_scan_once_defers_fresh_files ... ok
+test ingest::watcher::tests::test_scan_once_processes_old_files ... ok
+```
+✅ **PASS**: All watcher tests pass
 
 ---
 
-**After completing Phase 1.6, proceed with parallel tracks.**
+**Phase 1.6 COMPLETE. Ready for parallel tracks (Phase 2+3 and Phase 4).**
