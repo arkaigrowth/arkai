@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "arkai-tts"
+version = "0.1.0"
+description = "ElevenLabs TTS CLI for arkai/Claudia"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "elevenlabs>=1.0.0",
+    "typer>=0.9.0",
+    "rich>=13.0.0",
+]
+
+[project.scripts]
+arkai-tts = "tts.cli:cli"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+]

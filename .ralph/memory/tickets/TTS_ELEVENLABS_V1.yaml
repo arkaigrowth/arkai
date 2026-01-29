@@ -4,7 +4,7 @@
 
 id: TTS_ELEVENLABS_V1
 worker: voice-builder
-status: PENDING
+status: DONE
 blockedBy: []  # Independent of Gmail work
 branch: feat/tts-elevenlabs
 created: 2026-01-27T07:00:00Z
