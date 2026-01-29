@@ -4,7 +4,7 @@
 
 id: VOICE_PHASE_2_3
 worker: track-a
-status: REVIEW
+status: DONE
 blockedBy: []  # Phase 1.6 is done
 branch: voice/track-a-phase2-3
 created: 2026-01-29T03:30:00Z
