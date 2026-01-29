@@ -4,11 +4,11 @@
 
 id: VOICE_PHASE_4
 worker: track-b
-status: IN_PROGRESS
+status: REVIEW
 blockedBy: []  # Can start now, will need schemas from VOICE_PHASE_2_3 for validation
 branch: voice/track-b-phase4
 created: 2026-01-29T03:30:00Z
-updated: 2026-01-29T03:30:00Z
+updated: 2026-01-29T06:40:00Z
 
 # Files worker MUST read before starting
 context:
@@ -136,12 +136,50 @@ deliverables:
 
 # Worker fills these in when complete
 proofs:
-  directory_setup: ""
-  runner_syntax_check: ""
-  systemd_service_created: ""
-  test_request_result: ""
-  audit_log_sample: ""
-  groq_test: ""  # Optional if no test audio
+  directory_setup: |
+    $ ssh clawdbot-vps 'ls -d ~/clawd/artifacts/voice/{requests,results,audio-cache}'
+    /home/clawdbot/clawd/artifacts/voice/audio-cache
+    /home/clawdbot/clawd/artifacts/voice/requests
+    /home/clawdbot/clawd/artifacts/voice/results
+    ✓ PASS (includes .inflight for atomic claims)
+
+  runner_syntax_check: |
+    $ ssh clawdbot-vps 'cd ~/clawd/services/voice && .venv/bin/python -c "import vps_voice_runner"'
+    ✓ PASS - imports without error
+
+  systemd_service_created: |
+    $ systemctl --user status vps-voice-runner
+    ● vps-voice-runner.service - VPS Voice Runner - Whisper API transcription daemon
+         Loaded: loaded (enabled; preset: enabled)
+         Active: active (running) since Thu 2026-01-29 06:36:57 UTC
+    ✓ PASS - service running and enabled on boot
+
+  test_request_result: |
+    {
+      "id": "test-1769668630",
+      "status": "completed",
+      "processed_count": 1,
+      "transcripts": [
+        {
+          "file": "3e3e71a5-8c62-4723-a8c5-9fd1cf0a9ae7.ogg",
+          "transcript": "I guess I wanted to get the fabric patterns to work with this...",
+          "provider": "groq",
+          "transcribed_at": "2026-01-29T06:37:11.174227+00:00"
+        }
+      ],
+      "completed_at": "2026-01-29T06:37:11.174379+00:00"
+    }
+
+  audit_log_sample: |
+    {"ts": "2026-01-29T06:36:57.564211+00:00", "event": "runner_started", "pid": 885563}
+    {"ts": "2026-01-29T06:37:10.596056+00:00", "event": "received", "id": "test-1769668630"}
+    {"ts": "2026-01-29T06:37:10.596401+00:00", "event": "claimed", "id": "test-1769668630", "requested_by": "alex"}
+    {"ts": "2026-01-29T06:37:11.174243+00:00", "event": "transcribed", "id": "test-1769668630", "file": "3e3e71a5-...", "provider": "groq"}
+    {"ts": "2026-01-29T06:37:11.174624+00:00", "event": "result_written", "id": "test-1769668630", "status": "completed", "count": 1}
+
+  groq_test: |
+    ✓ PASS - Groq transcription completed in ~1 second
+    Real transcript from Telegram voice memo about fabric patterns
 
 # Risk assessment
 risk: |
@@ -170,17 +208,35 @@ rollback: |
     mv ~/clawd/artifacts/voice/audit.jsonl audit.jsonl.bak
     # Fresh log on next run
 
-# Dependencies
+# Dependencies (simplified from spec)
 dependencies:
   python_packages:
-    - watchdog
-    - aiofiles
-    - groq
-    - openai
-    - jsonschema
+    - groq        # Primary transcription API
+    - openai      # Fallback transcription API
+    - jsonschema  # For future schema validation
+    # NOTE: watchdog and aiofiles removed - using sync polling instead
   env_vars:
     - GROQ_API_KEY
     - OPENAI_API_KEY
+  venv_path: ~/clawd/services/voice/.venv
+
+# Implementation notes (deviations from spec)
+implementation_notes: |
+  SIMPLIFIED APPROACH (approved by user):
+  1. Polling instead of watchdog - matches existing tts-watcher.py pattern
+  2. Sync instead of async - Groq/OpenAI clients are sync anyway
+  3. Transcripts stored INLINE in result JSON - no data loss
+  4. Atomic claim via .inflight/ directory - prevents double-processing
+  5. Idempotency check - skip if result exists with status=completed
+  6. Bounded retries (3 attempts) with 2s delay
+  7. Fail-fast startup if no API keys configured
+  8. 24h retention cleanup on audio-cache at startup
+  9. Crash recovery - moves .inflight/ files back to requests/ on restart
+
+  API keys stored securely:
+  - ~/clawd/services/voice/.env with chmod 600
+  - Loaded via systemd EnvironmentFile directive
+  - Keys fetched from macOS Keychain, not stored in git
 
 # Sync point with Phase 2+3
 sync_notes: |
