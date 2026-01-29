@@ -58,6 +58,18 @@ pub enum VoiceCommands {
         /// Telegram chat ID (or use TELEGRAM_CHAT_ID env) - telegram route only
         #[arg(long, env = "TELEGRAM_CHAT_ID")]
         chat_id: Option<String>,
+
+        /// Stop after processing N items (safety cap)
+        #[arg(long)]
+        limit: Option<u32>,
+
+        /// Stop after processing H hours of audio (cumulative, safety cap)
+        #[arg(long)]
+        max_hours: Option<f32>,
+
+        /// Show what would be processed without actually processing
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// List all items in the queue
@@ -81,8 +93,8 @@ pub async fn execute(command: VoiceCommands) -> Result<()> {
         VoiceCommands::Status => execute_status().await,
         VoiceCommands::Scan { path } => execute_scan(path).await,
         VoiceCommands::Watch { once, path } => execute_watch(once, path).await,
-        VoiceCommands::Process { once, route, model, bot_token, chat_id } => {
-            execute_process(once, &route, &model, bot_token, chat_id).await
+        VoiceCommands::Process { once, route, model, bot_token, chat_id, limit, max_hours, dry_run } => {
+            execute_process(once, &route, &model, bot_token, chat_id, limit, max_hours, dry_run).await
         }
         VoiceCommands::List { status, limit } => execute_list(status, limit).await,
         VoiceCommands::Config => execute_config().await,
@@ -165,6 +177,9 @@ async fn execute_scan(path: Option<String>) -> Result<()> {
     println!("  Already queued:      {}", result.already_queued);
     println!("  Already processed:   {}", result.already_processed);
     println!("  Reset for retry:     {}", result.reset_for_retry);
+    if result.deferred > 0 {
+        println!("  Deferred (syncing):  {}", result.deferred);
+    }
     if result.errors > 0 {
         println!("  Errors:              {}", result.errors);
     }
@@ -246,6 +261,13 @@ async fn execute_watch(once: bool, path: Option<String>) -> Result<()> {
     Ok(())
 }
 
+/// Safety caps for processing
+struct ProcessCaps {
+    limit: Option<u32>,
+    max_hours: Option<f32>,
+    dry_run: bool,
+}
+
 /// Process pending voice memos and send to Claudia
 async fn execute_process(
     once: bool,
@@ -253,13 +275,135 @@ async fn execute_process(
     model: &str,
     bot_token: Option<String>,
     chat_id: Option<String>,
+    limit: Option<u32>,
+    max_hours: Option<f32>,
+    dry_run: bool,
 ) -> Result<()> {
     let queue = VoiceQueue::open_default().await?;
+    let caps = ProcessCaps { limit, max_hours, dry_run };
+
+    // Handle dry-run mode
+    if dry_run {
+        return execute_dry_run(&queue, &caps).await;
+    }
 
     match route {
-        "telegram" => execute_process_telegram(once, bot_token, chat_id, &queue).await,
-        "clawdbot" => execute_process_clawdbot(once, model, chat_id.as_deref(), &queue).await,
+        "telegram" => execute_process_telegram(once, bot_token, chat_id, &queue, &caps).await,
+        "clawdbot" => execute_process_clawdbot(once, model, chat_id.as_deref(), &queue, &caps).await,
         _ => anyhow::bail!("Unknown route: {}. Use 'telegram' or 'clawdbot'", route),
+    }
+}
+
+/// Execute dry-run: show what would be processed
+async fn execute_dry_run(queue: &VoiceQueue, caps: &ProcessCaps) -> Result<()> {
+    let pending = queue.get_pending().await?;
+
+    if pending.is_empty() {
+        println!("✓ No pending items to process");
+        return Ok(());
+    }
+
+    println!();
+    println!("Dry Run - Would process:");
+    println!("══════════════════════════════════════════════════════════════");
+    println!();
+    println!("{:<14} {:<30} {:<6} {:<10} {:<12}", "ID", "FILE", "EXT", "DURATION", "SIZE");
+    println!("{}", "-".repeat(75));
+
+    let mut count = 0u32;
+    let mut total_duration = 0.0f32;
+    let mut total_size = 0u64;
+
+    for item in &pending {
+        // Check limit cap
+        if let Some(limit) = caps.limit {
+            if count >= limit {
+                break;
+            }
+        }
+
+        // Check max-hours cap
+        let duration = item.data.duration_seconds.unwrap_or(0.0);
+        if let Some(max_hours) = caps.max_hours {
+            if total_duration / 3600.0 >= max_hours {
+                break;
+            }
+        }
+
+        // Get file extension
+        let ext = std::path::Path::new(&item.data.file_name)
+            .extension()
+            .map(|e| e.to_string_lossy().to_string())
+            .unwrap_or_else(|| "-".to_string());
+
+        // Format file name (truncate if too long)
+        let file_name = if item.data.file_name.len() > 28 {
+            format!("{}...", &item.data.file_name[..25])
+        } else {
+            item.data.file_name.clone()
+        };
+
+        // Format duration
+        let duration_str = if duration > 0.0 {
+            format!("{:.1}s", duration)
+        } else {
+            "?".to_string()
+        };
+
+        // Format size
+        let size_str = format_size(item.data.file_size);
+
+        println!(
+            "{:<14} {:<30} {:<6} {:<10} {:<12}",
+            &item.id[..12],
+            file_name,
+            ext,
+            duration_str,
+            size_str
+        );
+
+        count += 1;
+        total_duration += duration;
+        total_size += item.data.file_size;
+    }
+
+    println!("{}", "-".repeat(75));
+    println!();
+    println!("Summary:");
+    println!("  Items:    {}", count);
+    println!("  Duration: {:.1} minutes ({:.2} hours)", total_duration / 60.0, total_duration / 3600.0);
+    println!("  Size:     {}", format_size(total_size));
+
+    if caps.limit.is_some() || caps.max_hours.is_some() {
+        println!();
+        println!("Caps applied:");
+        if let Some(limit) = caps.limit {
+            println!("  --limit {}", limit);
+        }
+        if let Some(max_hours) = caps.max_hours {
+            println!("  --max-hours {}", max_hours);
+        }
+    }
+
+    let remaining = pending.len() - count as usize;
+    if remaining > 0 {
+        println!();
+        println!("Note: {} more item(s) would not be processed due to caps", remaining);
+    }
+
+    println!();
+
+    Ok(())
+}
+
+/// Format file size in human-readable form
+fn format_size(bytes: u64) -> String {
+    if bytes >= 1_048_576 {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    } else if bytes >= 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{} B", bytes)
     }
 }
 
@@ -269,6 +413,7 @@ async fn execute_process_telegram(
     bot_token: Option<String>,
     chat_id: Option<String>,
     queue: &VoiceQueue,
+    caps: &ProcessCaps,
 ) -> Result<()> {
     // Get credentials from args or env
     let bot_token = bot_token
@@ -282,7 +427,20 @@ async fn execute_process_telegram(
     let client = TelegramClient::new(bot_token, chat_id);
 
     println!("🦞 Processing voice queue → Claudia (Telegram)");
+    if caps.limit.is_some() || caps.max_hours.is_some() {
+        print!("   Caps: ");
+        if let Some(limit) = caps.limit {
+            print!("--limit {} ", limit);
+        }
+        if let Some(max_hours) = caps.max_hours {
+            print!("--max-hours {} ", max_hours);
+        }
+        println!();
+    }
     println!();
+
+    let mut processed_count = 0u32;
+    let mut total_duration = 0.0f32;
 
     loop {
         let pending = queue.get_pending().await?;
@@ -298,6 +456,23 @@ async fn execute_process_telegram(
         }
 
         for item in pending {
+            // Check limit cap
+            if let Some(limit) = caps.limit {
+                if processed_count >= limit {
+                    println!("⛔ Reached --limit {} cap", limit);
+                    return Ok(());
+                }
+            }
+
+            // Check max-hours cap
+            let item_duration = item.data.duration_seconds.unwrap_or(0.0);
+            if let Some(max_hours) = caps.max_hours {
+                if total_duration / 3600.0 >= max_hours {
+                    println!("⛔ Reached --max-hours {} cap ({:.1} min processed)", max_hours, total_duration / 60.0);
+                    return Ok(());
+                }
+            }
+
             println!(
                 "📤 Sending: {} ({})",
                 item.data.file_name,
@@ -310,6 +485,8 @@ async fn execute_process_telegram(
                 Ok(msg_id) => {
                     println!("   ✅ Sent! (message_id: {})", msg_id);
                     queue.mark_done(&item.id).await?;
+                    processed_count += 1;
+                    total_duration += item_duration;
                 }
                 Err(e) => {
                     println!("   ❌ Failed: {}", e);
@@ -338,6 +515,7 @@ async fn execute_process_clawdbot(
     model: &str,
     telegram_chat_id: Option<&str>,
     queue: &VoiceQueue,
+    caps: &ProcessCaps,
 ) -> Result<()> {
     let client = ClawdbotClient::from_env()
         .context("Clawdbot client setup failed. Set CLAWDBOT_TOKEN env var")?;
@@ -350,7 +528,20 @@ async fn execute_process_clawdbot(
     if deliver_to_telegram {
         println!("   Telegram delivery: enabled");
     }
+    if caps.limit.is_some() || caps.max_hours.is_some() {
+        print!("   Caps: ");
+        if let Some(limit) = caps.limit {
+            print!("--limit {} ", limit);
+        }
+        if let Some(max_hours) = caps.max_hours {
+            print!("--max-hours {} ", max_hours);
+        }
+        println!();
+    }
     println!();
+
+    let mut processed_count = 0u32;
+    let mut total_duration = 0.0f32;
 
     loop {
         let pending = queue.get_pending().await?;
@@ -366,6 +557,23 @@ async fn execute_process_clawdbot(
         }
 
         for item in pending {
+            // Check limit cap
+            if let Some(limit) = caps.limit {
+                if processed_count >= limit {
+                    println!("⛔ Reached --limit {} cap", limit);
+                    return Ok(());
+                }
+            }
+
+            // Check max-hours cap
+            let item_duration = item.data.duration_seconds.unwrap_or(0.0);
+            if let Some(max_hours) = caps.max_hours {
+                if total_duration / 3600.0 >= max_hours {
+                    println!("⛔ Reached --max-hours {} cap ({:.1} min processed)", max_hours, total_duration / 60.0);
+                    return Ok(());
+                }
+            }
+
             println!(
                 "🎙️  Processing: {} ({})",
                 item.data.file_name,
@@ -408,6 +616,8 @@ async fn execute_process_clawdbot(
                 Ok(_resp) => {
                     println!("   ✅ Sent to Claudia!");
                     queue.mark_done(&item.id).await?;
+                    processed_count += 1;
+                    total_duration += item_duration;
                 }
                 Err(e) => {
                     println!("   ❌ Failed to send: {}", e);
