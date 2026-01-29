@@ -1,0 +1,21 @@
+[Unit]
+Description=VPS Voice Runner - Whisper API transcription daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/home/clawdbot/clawd/services/voice/.venv/bin/python /home/clawdbot/clawd/services/voice/vps_voice_runner.py
+WorkingDirectory=/home/clawdbot/clawd/services/voice
+EnvironmentFile=/home/clawdbot/clawd/services/voice/.env
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/clawdbot/clawd/artifacts/voice
+ReadWritePaths=/home/clawdbot/.clawdbot/media/inbound
+
+[Install]
+WantedBy=default.target
