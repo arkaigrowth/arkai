@@ -9,6 +9,8 @@
 //! - Searches current directory and parents for .arkai/config.yaml
 //! - Paths in config file are relative to the config file's parent directory
 
+pub mod paths;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
