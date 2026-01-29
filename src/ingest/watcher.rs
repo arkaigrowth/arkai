@@ -19,6 +19,14 @@ use std::collections::HashMap;
 /// Minimum age before processing (hardening against iCloud sync)
 /// Files modified in the last 30 seconds are considered potentially unstable.
 const MIN_FILE_AGE_SECS: u64 = 30;
+
+/// Maximum deferrals before marking file as stuck (Phase 1.6 liveness guard)
+/// After this many reset_for_retry() calls, file is quarantined.
+const MAX_DEFERRALS: u32 = 20;
+
+/// Maximum time a file can be pending before being marked stuck (30 minutes)
+/// Prevents files from staying in pending state forever.
+const MAX_PENDING_SECS: u64 = 30 * 60;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -296,6 +304,12 @@ impl ScanResult {
 /// - Size + mtime unchanged for stability_delay
 /// - Minimum age since first seen
 /// - At least 3 consecutive stable checks with 2s minimum between each
+/// - Defer ceiling: max 20 deferrals or 30 min pending → stuck/quarantine
+///
+/// Future improvements (noted, not implemented):
+/// - TODO: Make timing (3 checks, 2s) configurable
+/// - TODO: ffprobe check only when first .qta encountered (not at startup)
+/// - TODO: Log spam prevention (once per file per N minutes)
 #[derive(Debug, Clone)]
 struct FileStabilityState {
     /// File size at last check
@@ -310,6 +324,8 @@ struct FileStabilityState {
     stable_checks: u32,
     /// When we last recorded a stable check (for 2s minimum enforcement)
     last_stable_check: Option<Instant>,
+    /// Number of times this file was deferred (liveness guard)
+    defer_count: u32,
 }
 
 impl FileStabilityState {
@@ -322,6 +338,7 @@ impl FileStabilityState {
             last_changed: now,
             stable_checks: 0,
             last_stable_check: None,
+            defer_count: 0,
         }
     }
 
@@ -373,10 +390,19 @@ impl FileStabilityState {
     }
 
     /// Reset for retry after a deferral
+    /// Increments defer_count for liveness tracking
     fn reset_for_retry(&mut self) {
         self.last_changed = Instant::now();
         self.stable_checks = 0;
         self.last_stable_check = None;
+        self.defer_count += 1;
+    }
+
+    /// Check if file is stuck (exceeded defer limits)
+    /// Returns true if file should be quarantined (too many deferrals or too long pending)
+    fn is_stuck(&self) -> bool {
+        let age = Instant::now().duration_since(self.first_seen);
+        self.defer_count >= MAX_DEFERRALS || age >= Duration::from_secs(MAX_PENDING_SECS)
     }
 }
 
@@ -460,6 +486,24 @@ async fn run_watcher(
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 tracing::error!("Watcher channel disconnected");
                 break;
+            }
+        }
+
+        // Phase 1.6 liveness guard: Remove stuck files (too many deferrals or too long pending)
+        let stuck_files: Vec<PathBuf> = pending
+            .iter()
+            .filter(|(_, state)| state.is_stuck())
+            .map(|(path, _)| path.clone())
+            .collect();
+
+        for path in stuck_files {
+            if let Some(state) = pending.remove(&path) {
+                tracing::warn!(
+                    "Quarantined (stuck syncing): {} (deferrals={}, age={:.0}s)",
+                    path.display(),
+                    state.defer_count,
+                    Instant::now().duration_since(state.first_seen).as_secs_f32()
+                );
             }
         }
 
