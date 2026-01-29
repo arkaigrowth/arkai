@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arkai.dev/schemas/voice_request.schema.json",
+  "title": "Voice Pipeline Request",
+  "description": "Schema for voice processing requests sent to VPS voice runner",
+  "type": "object",
+  "required": ["id", "action", "params", "requested_by", "requested_at"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique request identifier (UUID v4)"
+    },
+    "action": {
+      "type": "string",
+      "enum": ["process", "status", "cancel"],
+      "description": "Action to perform: process audio, check status, or cancel request"
+    },
+    "params": {
+      "type": "object",
+      "description": "Action-specific parameters",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "description": "Maximum number of items to process in this batch"
+        },
+        "max_hours": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 3.0,
+          "description": "Maximum total audio duration in hours for this batch"
+        },
+        "diarize": {
+          "type": "string",
+          "enum": ["auto", "always", "never"],
+          "default": "auto",
+          "description": "Diarization mode: auto (only if multi-speaker detected), always, or never"
+        },
+        "model": {
+          "type": "string",
+          "enum": ["base", "small", "medium"],
+          "default": "base",
+          "description": "Whisper model size to use for transcription"
+        }
+      },
+      "additionalProperties": false
+    },
+    "requested_by": {
+      "type": "string",
+      "enum": ["claudia", "alex", "system"],
+      "description": "Who initiated this request"
+    },
+    "requested_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when request was created"
+    }
+  },
+  "additionalProperties": false
+}
