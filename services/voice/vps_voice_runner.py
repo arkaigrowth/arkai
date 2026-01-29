@@ -22,16 +22,25 @@ from pathlib import Path
 from typing import Optional
 
 # =============================================================================
-# Configuration
+# Configuration - Import canonical paths from paths.py
 # =============================================================================
 
-VOICE_DIR = Path.home() / "clawd/artifacts/voice"
-REQUESTS_DIR = VOICE_DIR / "requests"
-INFLIGHT_DIR = REQUESTS_DIR / ".inflight"
-RESULTS_DIR = VOICE_DIR / "results"
-AUDIO_CACHE = VOICE_DIR / "audio-cache"
-AUDIT_LOG = VOICE_DIR / "audit.jsonl"
-TELEGRAM_INBOUND = Path.home() / ".clawdbot/media/inbound"
+from .paths import (
+    VPS_ARTIFACTS,
+    VPS_REQUESTS,
+    VPS_RESULTS,
+    VPS_AUDIO_CACHE,
+    VPS_AUDIT_LOG,
+    TELEGRAM_INBOUND,
+)
+
+# Alias to match existing code (simpler names)
+VOICE_DIR = VPS_ARTIFACTS
+REQUESTS_DIR = VPS_REQUESTS
+INFLIGHT_DIR = VPS_REQUESTS / ".inflight"  # Derived from canonical path
+RESULTS_DIR = VPS_RESULTS
+AUDIO_CACHE = VPS_AUDIO_CACHE
+AUDIT_LOG = VPS_AUDIT_LOG
 
 POLL_INTERVAL_SECS = 1
 MAX_RETRIES = 3
