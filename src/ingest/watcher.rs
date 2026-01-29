@@ -2,8 +2,23 @@
 //!
 //! Watches the Voice Memos directory for new .m4a files and emits events
 //! when they are stable (iCloud sync complete).
+//!
+//! ## Stability Hardening (Phase 1.5)
+//!
+//! Files must pass multiple checks before processing:
+//! - Size + mtime unchanged for stability_delay (10s default)
+//! - Minimum age of 30 seconds since first seen
+//! - At least 2 consecutive stable checks
+//! - ffprobe validation for .qta files (pre-normalize)
+//!
+//! If normalization or validation fails, files are deferred (not errored)
+//! and will be retried on the next stability window.
 
 use std::collections::HashMap;
+
+/// Minimum age before processing (hardening against iCloud sync)
+/// Files modified in the last 30 seconds are considered potentially unstable.
+const MIN_FILE_AGE_SECS: u64 = 30;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -16,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::mpsc;
 
-use super::queue::{compute_file_hash, EnqueueResult, VoiceQueue};
+use super::queue::{compute_file_hash, normalize_audio, EnqueueResult, VoiceQueue};
 
 /// Errors that can occur with the watcher
 #[derive(Debug, Error)]
@@ -51,8 +66,8 @@ impl Default for WatcherConfig {
     fn default() -> Self {
         Self {
             watch_path: Self::default_voice_memos_path(),
-            stability_delay_secs: 5,
-            extensions: vec!["m4a".to_string()],
+            stability_delay_secs: 10, // Bumped from 5 for iPhone sync stability
+            extensions: vec!["m4a".to_string(), "qta".to_string()], // Added .qta for iPhone sync
         }
     }
 }
@@ -142,8 +157,44 @@ impl VoiceMemoWatcher {
 
             let file_size = metadata.len();
 
-            // Enqueue the file
-            match queue.enqueue(&path, file_size, Utc::now()).await {
+            // Check file age - skip files modified in last 30 seconds (likely still syncing)
+            if let Ok(mtime) = metadata.modified() {
+                if let Ok(age) = mtime.elapsed() {
+                    if age < std::time::Duration::from_secs(MIN_FILE_AGE_SECS) {
+                        tracing::debug!("Skipped (too recent, age={:.1}s): {}", age.as_secs_f32(), path.display());
+                        result.deferred += 1;
+                        continue;
+                    }
+                }
+            }
+
+            // Pre-validate with ffprobe for .qta files
+            if is_qta_file(&path) {
+                if !validate_audio_readable(&path).await {
+                    tracing::info!("Deferred (ffprobe failed): {}", path.display());
+                    result.deferred += 1;
+                    continue;
+                }
+            }
+
+            // Normalize .qta → .m4a if needed (before hashing/enqueueing)
+            let normalized_path = match normalize_audio(&path).await {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::info!("Deferred (normalize failed): {} - {}", path.display(), e);
+                    result.deferred += 1;
+                    continue;
+                }
+            };
+
+            // Get normalized file size (may differ after conversion)
+            let normalized_size = match tokio::fs::metadata(&normalized_path).await {
+                Ok(m) => m.len(),
+                Err(_) => file_size, // Fallback to original size
+            };
+
+            // Enqueue the normalized file
+            match queue.enqueue(&normalized_path, normalized_size, Utc::now()).await {
                 Ok(enqueue_result) => match enqueue_result {
                     EnqueueResult::Queued(_) => result.new_files += 1,
                     EnqueueResult::AlreadyQueued(_) => result.already_queued += 1,
@@ -226,12 +277,85 @@ pub struct ScanResult {
     pub already_queued: usize,
     pub already_processed: usize,
     pub reset_for_retry: usize,
+    pub deferred: usize,
     pub errors: usize,
 }
 
 impl ScanResult {
     pub fn total_scanned(&self) -> usize {
         self.new_files + self.already_queued + self.already_processed + self.reset_for_retry
+    }
+}
+
+/// Stability tracking for a pending file
+/// Implements Chad's hardening requirements:
+/// - Size + mtime unchanged for stability_delay
+/// - Minimum age since first seen
+/// - Multiple consecutive stable checks
+#[derive(Debug, Clone)]
+struct FileStabilityState {
+    /// File size at last check
+    size: u64,
+    /// File mtime at last check (as SystemTime)
+    mtime: std::time::SystemTime,
+    /// When we first saw this file
+    first_seen: Instant,
+    /// When size/mtime last changed
+    last_changed: Instant,
+    /// Number of consecutive stable checks passed
+    stable_checks: u32,
+}
+
+impl FileStabilityState {
+    fn new(size: u64, mtime: std::time::SystemTime) -> Self {
+        let now = Instant::now();
+        Self {
+            size,
+            mtime,
+            first_seen: now,
+            last_changed: now,
+            stable_checks: 0,
+        }
+    }
+
+    /// Update state with new file metadata
+    /// Returns true if file changed (resets stability)
+    fn update(&mut self, new_size: u64, new_mtime: std::time::SystemTime) -> bool {
+        if new_size != self.size || new_mtime != self.mtime {
+            self.size = new_size;
+            self.mtime = new_mtime;
+            self.last_changed = Instant::now();
+            self.stable_checks = 0;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Check if file is stable enough for processing
+    /// Requirements:
+    /// - No changes for stability_delay
+    /// - Minimum age of 30 seconds since first seen
+    /// - At least 2 consecutive stable checks
+    fn is_stable(&self, stability_delay: Duration, min_age: Duration) -> bool {
+        let now = Instant::now();
+        let time_since_change = now.duration_since(self.last_changed);
+        let age = now.duration_since(self.first_seen);
+
+        time_since_change >= stability_delay
+            && age >= min_age
+            && self.stable_checks >= 2
+    }
+
+    /// Record a stable check (size/mtime unchanged)
+    fn record_stable_check(&mut self) {
+        self.stable_checks += 1;
+    }
+
+    /// Reset for retry after a deferral
+    fn reset_for_retry(&mut self) {
+        self.last_changed = Instant::now();
+        self.stable_checks = 0;
     }
 }
 
@@ -242,8 +366,8 @@ async fn run_watcher(
     event_tx: mpsc::Sender<AudioFileEvent>,
     stop_rx: &mut mpsc::Receiver<()>,
 ) -> Result<()> {
-    // Track files being stabilized (path -> (size, last_seen))
-    let mut pending: HashMap<PathBuf, (u64, Instant)> = HashMap::new();
+    // Track files being stabilized with enhanced state
+    let mut pending: HashMap<PathBuf, FileStabilityState> = HashMap::new();
 
     // Create debounced watcher
     let (tx, rx) = std::sync::mpsc::channel();
@@ -256,8 +380,14 @@ async fn run_watcher(
     debouncer.watcher().watch(&config.watch_path, RecursiveMode::NonRecursive)?;
 
     let stability_delay = Duration::from_secs(config.stability_delay_secs);
+    let min_age = Duration::from_secs(MIN_FILE_AGE_SECS);
 
-    tracing::info!("Watching {} for audio files", config.watch_path.display());
+    tracing::info!(
+        "Watching {} for audio files (stability: {}s, min_age: {}s)",
+        config.watch_path.display(),
+        config.stability_delay_secs,
+        MIN_FILE_AGE_SECS
+    );
 
     loop {
         // Check for stop signal
@@ -281,11 +411,18 @@ async fn run_watcher(
                         continue;
                     }
 
-                    // Get current file size
+                    // Get current file metadata (size + mtime)
                     if let Ok(metadata) = std::fs::metadata(&path) {
                         if metadata.is_file() {
                             let size = metadata.len();
-                            pending.insert(path, (size, Instant::now()));
+                            let mtime = metadata.modified().unwrap_or(std::time::SystemTime::now());
+
+                            // Update or create tracking state
+                            if let Some(state) = pending.get_mut(&path) {
+                                state.update(size, mtime);
+                            } else {
+                                pending.insert(path, FileStabilityState::new(size, mtime));
+                            }
                         }
                     }
                 }
@@ -302,56 +439,92 @@ async fn run_watcher(
             }
         }
 
-        // Check for stable files
-        let now = Instant::now();
+        // Check for stable files (two-phase: first update states, then collect stable ones)
         let mut stable_files = Vec::new();
 
-        for (path, (last_size, last_seen)) in pending.iter() {
-            if now.duration_since(*last_seen) >= stability_delay {
-                // Check current size
-                if let Ok(metadata) = std::fs::metadata(path) {
-                    let current_size = metadata.len();
-                    if current_size == *last_size && current_size > 0 {
-                        stable_files.push((path.clone(), current_size));
-                    } else {
-                        // Size changed, update tracking
-                        // Note: We can't modify during iteration, handle after
-                    }
+        for (path, state) in pending.iter_mut() {
+            // Get current metadata
+            if let Ok(metadata) = std::fs::metadata(path) {
+                let current_size = metadata.len();
+                let current_mtime = metadata.modified().unwrap_or(std::time::SystemTime::now());
+
+                // Check if file changed
+                if !state.update(current_size, current_mtime) {
+                    // File unchanged - record a stable check
+                    state.record_stable_check();
+                }
+
+                // Check if fully stable (delay + min_age + 2 stable checks)
+                if current_size > 0 && state.is_stable(stability_delay, min_age) {
+                    stable_files.push((path.clone(), current_size));
                 }
             }
         }
 
         // Process stable files
         for (path, size) in stable_files {
+            // Pre-normalize validation: verify file is readable with ffprobe
+            // If this fails, the file is likely still syncing despite passing stability checks
+            if is_qta_file(&path) {
+                if !validate_audio_readable(&path).await {
+                    tracing::info!("Deferred (ffprobe failed, still syncing?): {}", path.display());
+                    // Reset for retry - don't remove from pending
+                    if let Some(state) = pending.get_mut(&path) {
+                        state.reset_for_retry();
+                    }
+                    continue;
+                }
+            }
+
+            // Normalize .qta → .m4a if needed (before hashing/enqueueing)
+            let normalized_path = match normalize_audio(&path).await {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::info!("Deferred (normalize failed): {} - {}", path.display(), e);
+                    // Reset for retry - don't remove from pending
+                    if let Some(state) = pending.get_mut(&path) {
+                        state.reset_for_retry();
+                    }
+                    continue;
+                }
+            };
+
+            // Successfully normalized - NOW remove from pending
             pending.remove(&path);
 
+            // Get normalized file size
+            let normalized_size = match tokio::fs::metadata(&normalized_path).await {
+                Ok(m) => m.len(),
+                Err(_) => size, // Fallback to original size
+            };
+
             // Compute hash and create event
-            match compute_file_hash(&path).await {
+            match compute_file_hash(&normalized_path).await {
                 Ok(hash) => {
                     let audio_event = AudioFileEvent {
-                        path: path.clone(),
+                        path: normalized_path.clone(),
                         hash: hash.clone(),
-                        size,
+                        size: normalized_size,
                         detected_at: Utc::now(),
                     };
 
-                    // Enqueue to queue
-                    match queue.enqueue(&path, size, Utc::now()).await {
+                    // Enqueue the normalized file
+                    match queue.enqueue(&normalized_path, normalized_size, Utc::now()).await {
                         Ok(result) => {
                             if result.is_new() {
-                                tracing::info!("New audio file queued: {} ({})", path.display(), hash);
+                                tracing::info!("New audio file queued: {} ({})", normalized_path.display(), hash);
                                 let _ = event_tx.send(audio_event).await;
                             } else {
-                                tracing::debug!("Audio file already in queue: {}", path.display());
+                                tracing::debug!("Audio file already in queue: {}", normalized_path.display());
                             }
                         }
                         Err(e) => {
-                            tracing::warn!("Failed to enqueue {}: {}", path.display(), e);
+                            tracing::warn!("Failed to enqueue {}: {}", normalized_path.display(), e);
                         }
                     }
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to hash {}: {}", path.display(), e);
+                    tracing::warn!("Failed to hash {}: {}", normalized_path.display(), e);
                 }
             }
         }
@@ -361,6 +534,37 @@ async fn run_watcher(
     }
 
     Ok(())
+}
+
+/// Check if a path is a .qta file
+fn is_qta_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("qta"))
+        .unwrap_or(false)
+}
+
+/// Validate that an audio file is readable using ffprobe
+/// Returns false if ffprobe fails (file likely still syncing)
+async fn validate_audio_readable(path: &Path) -> bool {
+    let output = tokio::process::Command::new("ffprobe")
+        .args([
+            "-v", "quiet",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+        ])
+        .arg(path)
+        .output()
+        .await;
+
+    match output {
+        Ok(out) => {
+            // ffprobe succeeded - check if we got a valid duration
+            let duration_str = String::from_utf8_lossy(&out.stdout);
+            duration_str.trim().parse::<f32>().is_ok()
+        }
+        Err(_) => false,
+    }
 }
 
 #[cfg(test)]
