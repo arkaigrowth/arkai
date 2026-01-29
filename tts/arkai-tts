@@ -1,0 +1,16 @@
+#!/bin/bash
+# arkai-tts - ElevenLabs TTS CLI wrapper
+# Runs the Python TTS CLI with the correct environment
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV_DIR="$SCRIPT_DIR/.venv"
+
+# Check if venv exists
+if [ ! -d "$VENV_DIR" ]; then
+    echo "Setting up Python environment..."
+    python3 -m venv "$VENV_DIR"
+    "$VENV_DIR/bin/pip" install -q elevenlabs typer rich
+fi
+
+# Run the CLI
+PYTHONPATH="${SCRIPT_DIR}/.." "$VENV_DIR/bin/python" -m tts.cli "$@"
