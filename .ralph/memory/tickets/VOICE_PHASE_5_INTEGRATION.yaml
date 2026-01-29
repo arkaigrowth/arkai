@@ -1,0 +1,148 @@
+# Ticket: Voice Pipeline Phase 5 - End-to-End Integration
+# Worker: clawdbot-builder
+# Priority: HIGH (completes the pipeline)
+
+id: VOICE_PHASE_5_INTEGRATION
+worker: clawdbot-builder
+status: IN_PROGRESS
+blockedBy: []  # Phase 2+3 and Phase 4 complete
+branch: voice/phase5-integration
+created: 2026-01-29T07:15:00Z
+updated: 2026-01-29T07:15:00Z
+
+# Files worker MUST read before starting
+context:
+  - .claude/CLAUDE.md
+  - .ralph/memory/specs/VOICE_PIPELINE_V2.1_BUILD_SPEC.md
+  - contracts/voice_request.schema.json
+  - contracts/voice_result.schema.json
+  - src/cli/voice.rs                    # Existing CLI commands
+
+# What to do
+task: |
+  Wire the complete Mac → VPS → Claudia pipeline.
+
+  ## Current State (Verified Working)
+  - Mac: Watcher queues voice memos to voice_queue.jsonl ✅
+  - VPS: Runner transcribes requests via Groq API ✅ (smoke tested)
+  - Claudia: Can respond via Telegram ✅
+
+  ## Missing Glue
+
+  ### 1. Mac → VPS Request Creation
+  When `arkai voice process` runs, it should:
+  - Read pending items from voice_queue.jsonl
+  - Create request JSON in VPS ~/clawd/artifacts/voice/requests/
+  - Options:
+    A) rsync/scp the request file
+    B) Use existing clawdbot webhook to trigger
+    C) Direct write via Tailscale mount
+
+  Recommendation: Option B - use webhook, it's already wired.
+
+  ### 2. VPS → Claudia Notification
+  When runner completes transcription:
+  - Claudia should be notified of new transcripts
+  - Options:
+    A) Runner calls clawdbot webhook with result
+    B) Claudia watches results/ directory
+    C) Runner writes to Claudia's memory directly
+
+  Recommendation: Option A - webhook is cleanest.
+
+  ### 3. Claudia Response Flow
+  When Claudia gets transcript:
+  - Classify intent (NOTE | TASK | IDEA | QUESTION | COMMAND)
+  - Write to appropriate location (Obsidian, Claudia memory, etc.)
+  - Respond via Telegram if needed
+
+  ## Implementation Tasks
+
+  1. **Modify vps_voice_runner.py**: After writing result, POST to clawdbot
+     webhook with transcript summary.
+
+  2. **Add Claudia handler**: In clawdbot gateway or SOUL.md, define how
+     Claudia processes incoming voice transcripts.
+
+  3. **Test E2E**: Voice memo on Mac → transcript appears → Claudia responds.
+
+  ## Test Scenario
+  ```bash
+  # On Mac: Create test voice memo (or use existing)
+  touch ~/Library/.../Recordings/test.m4a
+
+  # Watch queue
+  tail -f ~/.arkai/voice_queue.jsonl
+
+  # Trigger processing
+  arkai voice process --limit 1
+
+  # On VPS: Watch for request/result
+  watch 'ls -la ~/clawd/artifacts/voice/{requests,results}/'
+
+  # Verify Claudia got notified (check Telegram or logs)
+  ```
+
+# Acceptance criteria
+acceptance:
+  - description: "Voice memo triggers request creation on VPS"
+    manual: true
+    description: "Queue item on Mac → request JSON appears in VPS requests/"
+
+  - description: "VPS runner processes and notifies Claudia"
+    manual: true
+    description: "Result JSON written → Claudia receives transcript"
+
+  - description: "Claudia responds appropriately"
+    manual: true
+    description: "Telegram message or Obsidian artifact created"
+
+  - description: "Full E2E under 60 seconds"
+    manual: true
+    description: "Voice memo to Claudia response in < 1 min"
+
+# Expected outputs
+deliverables:
+  - path: ~/clawd/services/voice/vps_voice_runner.py
+    description: "Updated with webhook notification"
+    location: VPS
+  - path: Claudia handler for voice transcripts
+    description: "In clawdbot or SOUL.md"
+    location: VPS
+
+# Worker fills these in when complete
+proofs:
+  e2e_test_log: ""
+  claudia_response_screenshot: ""
+  latency_measurement: ""
+
+# Risk assessment
+risk: |
+  WEBHOOK AUTH: Clawdbot webhook may require token. Ensure runner has
+  CLAWDBOT_TOKEN in environment.
+
+  DUPLICATE PROCESSING: If runner re-processes same request, could spam
+  Claudia. Add idempotency check.
+
+  CLAUDIA CONTEXT: Claudia needs to understand voice transcript format.
+  May need to update SOUL.md or ARKAI.md.
+
+rollback: |
+  If integration breaks existing clawdbot:
+    - Disable webhook call in runner
+    - Claudia continues working via direct Telegram
+
+error: null
+
+# Notes for clawdbot-builder
+handoff_notes: |
+  Smoke test verified runner works:
+  - Request: ~/clawd/artifacts/voice/requests/smoke-*.json
+  - Result: Groq transcription succeeded in ~1 second
+  - Audit log captures full trace
+
+  The runner is already running (2 processes). You can test by creating
+  request JSON files directly.
+
+  Key question to answer: Should Claudia process voice transcripts
+  automatically, or wait for user to ask "what did I say?"
