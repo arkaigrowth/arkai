@@ -164,7 +164,27 @@ ssh clawdbot-vps 'echo "{\"id\":\"test-$(date +%s)\",\"action\":\"process\",\"pa
 
 ## 8. Next Session Build Order
 
-**Recommended sequence:**
+**PRIORITY 0: Switch Clawdbot to OpenRouter (DO THIS FIRST)**
+
+Reason: Claude Max via Clawdbot may violate ToS. Switch to legitimate API.
+
+```
+OpenRouter Key: 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
+Default Model: moonshotai/kimi-k2.5
+Fallback Model: thudm/glm-4
+Config File: ~/.clawdbot/clawdbot.json
+Current Profile: anthropic:clawd-claude-max
+```
+
+Steps:
+1. SSH to VPS: `ssh clawdbot-vps`
+2. Check clawdbot auth commands: `clawdbot auth --help`
+3. Add OpenRouter provider: `clawdbot auth add openrouter` (enter key when prompted)
+4. Set default model to Kimi 2.5
+5. Test with Telegram message to Claudia
+6. Verify response comes from Kimi (check logs)
+
+**THEN continue with:**
 
 1. **Mac → VPS Flow** (unblocks real voice memo testing)
    - Update `arkai voice process` to create VPS request + sync audio
@@ -188,11 +208,30 @@ ssh clawdbot-vps 'echo "{\"id\":\"test-$(date +%s)\",\"action\":\"process\",\"pa
 
 ## 9. Known Issues / Follow-ups
 
-1. **VPS runner log location** - `runner.log` not writing (nohup redirect issue)
-2. **contracts/README.md** - Exists but may need update per build prompt
-3. **Systemd service** - Not enabled (runner started manually)
-4. **Mac diarizer** - Needs pyannote installed on Mac
-5. **Moltbot node setup** - Mac not registered as node yet
+1. **OpenRouter switch pending** - Clawdbot still on Claude Max (ToS risk)
+2. **VPS crashed during session** - Power cycled via Hetzner; now stable
+3. **VPS runner log location** - `runner.log` not writing (nohup redirect issue)
+4. **Systemd service** - Not enabled (runner started manually)
+5. **Mac diarizer** - Needs pyannote installed on Mac
+6. **Moltbot node setup** - Mac not registered as node yet
+
+## 10. VPS Recovery (If It Goes Down Again)
+
+```bash
+# Check Tailscale status (CLI now installed)
+tailscale status | grep clawdbot
+
+# If offline: Go to Hetzner Cloud Dashboard
+# Server: arkai-clawdbot
+# IPv4: 65.21.54.211
+# Action: Power Off → Wait 10s → Power On
+
+# After boot, verify:
+ssh clawdbot-vps 'hostname && uptime'
+
+# Restart voice runner if needed:
+ssh clawdbot-vps 'cd ~/clawd/services/voice && source .env && export GROQ_API_KEY OPENAI_API_KEY CLAWDBOT_TOKEN && nohup .venv/bin/python vps_voice_runner.py &'
+```
 
 ---
 
