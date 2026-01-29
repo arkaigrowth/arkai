@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arkai.dev/schemas/voice_result.schema.json",
+  "title": "Voice Pipeline Result",
+  "description": "Schema for voice processing results written by VPS voice runner",
+  "type": "object",
+  "required": ["id", "status", "completed_at"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Request ID this result corresponds to"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["completed", "partial", "failed"],
+      "description": "Overall processing status"
+    },
+    "processed_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of audio files successfully processed"
+    },
+    "total_duration_seconds": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Total audio duration processed in seconds"
+    },
+    "baseline": {
+      "type": "object",
+      "description": "Baseline transcription results (always produced)",
+      "properties": {
+        "transcript_refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "References to transcript files/IDs produced"
+        }
+      },
+      "additionalProperties": true
+    },
+    "speaker_detection": {
+      "type": "object",
+      "description": "Speaker detection analysis results",
+      "properties": {
+        "likely_multi_speaker": {
+          "type": "boolean",
+          "description": "Whether multiple speakers were detected"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Confidence score for speaker detection (0-1)"
+        },
+        "method": {
+          "type": "string",
+          "enum": ["tier2_vad_mfcc"],
+          "description": "Detection method used"
+        }
+      },
+      "additionalProperties": false
+    },
+    "diarization": {
+      "type": "object",
+      "description": "Diarization processing status and results",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["not_needed", "queued", "completed", "failed"],
+          "description": "Diarization processing status"
+        },
+        "transcript_ref": {
+          "type": "string",
+          "description": "Reference to diarized transcript if completed"
+        }
+      },
+      "additionalProperties": false
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when processing completed"
+    },
+    "error": {
+      "type": "string",
+      "description": "Error message if status is 'failed' or 'partial'"
+    }
+  },
+  "additionalProperties": true
+}
