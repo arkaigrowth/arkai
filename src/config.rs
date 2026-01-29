@@ -272,6 +272,25 @@ pub fn catalog_path() -> Result<PathBuf> {
     Ok(config()?.home.join("catalog.json"))
 }
 
+/// Get the voice cache directory ($ARKAI_HOME/voice_cache/)
+/// Used for storing normalized audio files (.qta → .m4a conversions)
+///
+/// ## Cleanup Policy (TODO)
+///
+/// The voice_cache directory stores normalized .m4a files converted from .qta.
+/// Files are named by their content hash, ensuring idempotency.
+///
+/// Future cleanup options:
+/// - Delete files older than N days (e.g., 30 days)
+/// - Delete files not referenced in voice_queue.jsonl
+/// - Manual cleanup via `arkai voice cleanup --cache`
+///
+/// For now, this directory grows unbounded. Typical size is small (a few GB max)
+/// since it only contains normalized versions of .qta files, not all voice memos.
+pub fn voice_cache_dir() -> Result<PathBuf> {
+    Ok(config()?.home.join("voice_cache"))
+}
+
 /// Get the content directory for a specific content type
 pub fn content_type_dir(content_type: ContentType) -> Result<PathBuf> {
     Ok(config()?.content_type_dir(content_type))

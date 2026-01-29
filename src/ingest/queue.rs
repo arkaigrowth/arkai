@@ -89,6 +89,10 @@ pub struct QueueItemData {
 
     /// When the file was detected
     pub detected_at: DateTime<Utc>,
+
+    /// Audio duration in seconds (populated via ffprobe)
+    #[serde(default)]
+    pub duration_seconds: Option<f32>,
 }
 
 /// A queue item with current state (derived from replaying events)
@@ -275,6 +279,9 @@ impl VoiceQueue {
             }
         }
 
+        // Probe audio duration
+        let duration_seconds = probe_duration(file_path).await;
+
         // Create queue item data
         let item_data = QueueItemData {
             file_path: file_path.to_path_buf(),
@@ -285,6 +292,7 @@ impl VoiceQueue {
                 .to_string(),
             file_size,
             detected_at,
+            duration_seconds,
         };
 
         // Append enqueue event
@@ -445,15 +453,94 @@ impl QueueStatus {
     }
 }
 
-/// Compute SHA256 hash of file content (first 12 chars)
+/// Compute SHA256 hash of file content using streaming (8KB chunks)
+/// Returns first 12 hex characters of the hash.
+/// Uses streaming to avoid loading entire file into memory.
 pub async fn compute_file_hash(path: &Path) -> Result<String, std::io::Error> {
-    let content = tokio::fs::read(path).await?;
-    let mut hasher = Sha256::new();
-    hasher.update(&content);
-    let result = hasher.finalize();
+    use tokio::io::AsyncReadExt;
 
-    // Return first 12 hex characters
+    let file = tokio::fs::File::open(path).await?;
+    let mut reader = tokio::io::BufReader::new(file);
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 8192]; // 8KB chunks
+
+    loop {
+        let n = reader.read(&mut buffer).await?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+
+    let result = hasher.finalize();
     Ok(format!("{:x}", result)[..12].to_string())
+}
+
+/// Probe audio duration in seconds using ffprobe
+pub async fn probe_duration(path: &Path) -> Option<f32> {
+    let output = tokio::process::Command::new("ffprobe")
+        .args([
+            "-v", "quiet",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+        ])
+        .arg(path)
+        .output()
+        .await
+        .ok()?;
+
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// Normalize audio file if needed (.qta → .m4a)
+/// Returns the path to use for hashing/processing.
+/// For .m4a files, returns the original path unchanged.
+/// For .qta files, converts to .m4a and caches in voice_cache directory.
+///
+/// Security: ffmpeg args are hardcoded, no user input in command construction.
+pub async fn normalize_audio(input: &Path) -> Result<PathBuf> {
+    // If not .qta, return original path unchanged
+    if input.extension().map(|e| e != "qta").unwrap_or(true) {
+        return Ok(input.to_path_buf());
+    }
+
+    // Get cache directory
+    let cache_dir = crate::config::voice_cache_dir()?;
+    fs::create_dir_all(&cache_dir).await?;
+
+    // Compute hash of input file to create cache filename
+    let hash = compute_file_hash(input).await?;
+    let output = cache_dir.join(format!("{}.m4a", hash));
+
+    // If already cached, return cached path
+    if output.exists() {
+        tracing::debug!("Using cached normalized audio: {}", output.display());
+        return Ok(output);
+    }
+
+    // Convert .qta → .m4a using ffmpeg with hardcoded args (security)
+    tracing::info!("Normalizing .qta → .m4a: {}", input.display());
+    let status = tokio::process::Command::new("ffmpeg")
+        .args([
+            "-i", input.to_str().unwrap_or(""),
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-y", // Overwrite output
+        ])
+        .arg(&output)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await?;
+
+    if !status.success() {
+        anyhow::bail!("ffmpeg normalization failed for {}", input.display());
+    }
+
+    Ok(output)
 }
 
 #[cfg(test)]
