@@ -1,19 +1,41 @@
 ---
 created: 2026-01-29
 purpose: Resume prompt for Phase 2+3 build session (Track A - Mac/arkai)
-depends_on: Phase 1 + 1.5 complete
+depends_on: Phase 1 + 1.5 + 1.6 complete
+ticket: VOICE_PHASE_2_3
 ---
 
 # Phase 2 + 3 - Build Session (Track A)
 
+## ⚠️ WORKER PROTOCOL - READ FIRST
+
+You are a **worker session** executing ticket `VOICE_PHASE_2_3`.
+
+### Before Starting
+1. Read `.claude/CLAUDE.md` (project overview + worker protocol)
+2. Read your ticket: `.ralph/memory/tickets/VOICE_PHASE_2_3.yaml`
+3. Verify you're on branch: `voice/track-a-phase2-3`
+4. Read all files in ticket's `context` section
+
+### When Complete
+1. Fill in `proofs` section of ticket with command outputs
+2. Set ticket `status: REVIEW`
+3. Update `updated` timestamp
+4. Commit and push branch
+5. Signal: "Ticket VOICE_PHASE_2_3 ready for review"
+
+---
+
 ## Context
 
-You are continuing work on the arkai voice pipeline. Phase 1 (CLI caps, streaming hash, .qta support) and Phase 1.5 (stability hardening) are complete.
+You are continuing work on the arkai voice pipeline. Phase 1 (CLI caps, streaming hash, .qta support), Phase 1.5 (stability hardening), and Phase 1.6 (liveness guard) are complete.
 
 **Read the spec first:**
 ```
 .ralph/memory/specs/VOICE_PIPELINE_V2.1_BUILD_SPEC.md
 ```
+
+**Your ticket has machine-checkable acceptance criteria. Verify each one passes.**
 
 ## What's Done (DO NOT REBUILD)
 
@@ -199,6 +221,31 @@ While you work on Phase 2+3, another session is building Phase 4 (VPS voice runn
 **Sync point**: Phase 4 needs schemas from Phase 3 to validate requests/results.
 - Commit schemas early so VPS session can pull them
 - Or: VPS session can use inline schema until Phase 3 is done
+
+---
+
+## Completion Checklist
+
+Before marking ticket as REVIEW:
+
+```bash
+# 1. Run all acceptance criteria from ticket
+cargo build --release 2>&1 | grep -v warning  # No errors
+cargo test paths  # All pass
+python3 -c 'from services.voice.paths import VPS_REQUESTS; print("OK")'
+python3 -c 'from services.voice.validator import validate_request; print("OK")'
+
+# 2. Commit your changes
+git add -A
+git commit -m "feat(voice): Phase 2+3 - path authority and schemas"
+git push origin voice/track-a-phase2-3
+
+# 3. Update ticket
+# Edit .ralph/memory/tickets/VOICE_PHASE_2_3.yaml:
+#   - Fill proofs section with command outputs
+#   - Set status: REVIEW
+#   - Update: updated timestamp
+```
 
 ---
 

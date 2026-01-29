@@ -1,0 +1,150 @@
+# Ticket: Voice Pipeline Phase 2+3 - Path Authority & Schemas
+# Worker: track-a
+# Priority: HIGH (parallel with Phase 4)
+
+id: VOICE_PHASE_2_3
+worker: track-a
+status: IN_PROGRESS
+blockedBy: []  # Phase 1.6 is done
+branch: voice/track-a-phase2-3
+created: 2026-01-29T03:30:00Z
+updated: 2026-01-29T03:30:00Z
+
+# Files worker MUST read before starting
+context:
+  - .claude/CLAUDE.md                                    # Project overview + worker protocol
+  - .ralph/memory/specs/VOICE_PIPELINE_V2.1_BUILD_SPEC.md  # Master spec
+  - .ralph/memory/prompts/PHASE_2_3_BUILD_SESSION.md     # Session prompt (detailed)
+  - src/config.rs                                        # Existing config patterns
+  - src/ingest/queue.rs                                  # Queue data structures
+
+# What to do
+task: |
+  Implement Phase 2 (Path Authority) and Phase 3 (Schemas + Validators).
+
+  ## Phase 2: Path Authority Module (~1 hour)
+
+  Create canonical path definitions that all code imports instead of hardcoding.
+
+  1. Create `src/config/paths.rs`:
+     - Mac paths: arkai_home(), voice_queue(), voice_cache(), library_voice()
+     - VPS path constants: VPS_ARTIFACTS, VPS_REQUESTS, VPS_RESULTS, VPS_AUDIO_CACHE
+     - Clawdbot paths: TELEGRAM_INBOUND
+     - Voice Memos: voice_memos_dir()
+
+  2. Create `services/voice/paths.py` (for VPS Python code):
+     - VPS_ARTIFACTS, VPS_REQUESTS, VPS_RESULTS, VPS_AUDIO_CACHE, VPS_AUDIT_LOG
+     - TELEGRAM_INBOUND
+
+  ## Phase 3: Schemas + Validators (~1 hour)
+
+  Create JSON Schema contracts for request/result formats.
+
+  1. Create `contracts/voice_request.schema.json`:
+     - Required: id (uuid), action (enum), params, requested_by, requested_at
+     - Action enum: process | status | cancel
+     - Params: limit, max_hours, diarize, model
+
+  2. Create `contracts/voice_result.schema.json`:
+     - Required: id, status, completed_at
+     - Status enum: completed | partial | failed
+     - Optional: processed_count, total_duration_seconds, baseline, speaker_detection, diarization
+
+  3. Create `services/voice/validator.py`:
+     - load_schema(name) -> dict
+     - validate_request(data) -> raises ValidationError
+     - validate_result(data) -> raises ValidationError
+
+  ## Key Principles
+  - NO hardcoded paths in new code
+  - All imports from paths module
+  - Schemas are contracts between Mac and VPS
+
+# Machine-checkable acceptance criteria
+acceptance:
+  - description: "paths.rs compiles without errors"
+    cmd: "cargo build --release 2>&1 | grep -v warning"
+    expect_not: "error"
+
+  - description: "paths.rs exports expected functions"
+    cmd: "grep -E 'pub fn (arkai_home|voice_queue|voice_cache|library_voice|voice_memos_dir)' src/config/paths.rs | wc -l"
+    expect: "5"
+
+  - description: "Python paths module importable"
+    cmd: "cd /Users/alexkamysz/AI/arkai && python3 -c 'from services.voice.paths import VPS_REQUESTS, VPS_RESULTS; print(\"OK\")'"
+    expect: "OK"
+
+  - description: "voice_request.schema.json is valid JSON Schema"
+    cmd: "python3 -c 'import json; json.load(open(\"contracts/voice_request.schema.json\")); print(\"valid\")'"
+    expect: "valid"
+
+  - description: "voice_result.schema.json is valid JSON Schema"
+    cmd: "python3 -c 'import json; json.load(open(\"contracts/voice_result.schema.json\")); print(\"valid\")'"
+    expect: "valid"
+
+  - description: "Python validator works"
+    cmd: "cd /Users/alexkamysz/AI/arkai && python3 -c 'from services.voice.validator import validate_request, validate_result; print(\"OK\")'"
+    expect: "OK"
+
+  - description: "cargo test passes"
+    cmd: "cargo test paths 2>&1"
+    expect_not: "FAILED"
+
+# Expected outputs
+deliverables:
+  - path: src/config/paths.rs
+    description: "Rust path authority module"
+  - path: src/config/mod.rs
+    description: "Updated to export paths module"
+  - path: services/voice/paths.py
+    description: "Python path definitions for VPS"
+  - path: services/voice/__init__.py
+    description: "Python package init"
+  - path: contracts/voice_request.schema.json
+    description: "JSON Schema for voice requests"
+  - path: contracts/voice_result.schema.json
+    description: "JSON Schema for voice results"
+  - path: services/voice/validator.py
+    description: "Python schema validator"
+
+# Worker fills these in when complete
+proofs:
+  cargo_build: ""
+  cargo_test_paths: ""
+  python_paths_import: ""
+  python_validator_import: ""
+  schema_validation_test: ""
+
+# Risk assessment
+risk: |
+  PATH COMPATIBILITY: Paths hardcoded for Mac/VPS split. If architecture changes,
+  paths module needs update.
+
+  PYTHON LOCATION: services/voice/ may not be in PYTHONPATH on VPS. Worker must
+  verify import works from VPS cwd.
+
+  SCHEMA STRICTNESS: Over-strict schemas can break forward compatibility.
+  Use additionalProperties: true where appropriate.
+
+rollback: |
+  If paths module breaks existing code:
+    git checkout main -- src/config/
+
+  If schemas are wrong:
+    rm contracts/voice_*.schema.json
+    # Regenerate with fixes
+
+# Sync point with Phase 4
+sync_notes: |
+  Phase 4 (VPS) needs these schemas for request/result validation.
+  Options for Phase 4:
+  1. Wait for this ticket to complete, then pull
+  2. Use inline schema temporarily, swap when this merges
+
+  Recommended: This ticket commits schemas first, Phase 4 pulls before validation impl.
+
+protected_files:
+  - docs/ARCHITECTURE.md
+  - .claude/CLAUDE.md
+
+error: null
