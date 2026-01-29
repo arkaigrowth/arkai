@@ -33,6 +33,7 @@ from .paths import (
     VPS_AUDIT_LOG,
     TELEGRAM_INBOUND,
 )
+from .clawdbot_client import ClawdbotClient
 
 # Alias to match existing code (simpler names)
 VOICE_DIR = VPS_ARTIFACTS
@@ -51,8 +52,12 @@ AUDIO_RETENTION_HOURS = 24
 # Startup Validation
 # =============================================================================
 
-def validate_startup() -> tuple[Optional[str], Optional[str]]:
-    """Validate environment and return (groq_key, openai_key). Fail fast if both missing."""
+def validate_startup() -> tuple[Optional[str], Optional[str], Optional[ClawdbotClient]]:
+    """Validate environment and return (groq_key, openai_key, clawdbot_client).
+
+    Fail fast if no transcription API keys.
+    Clawdbot client is optional (graceful degradation if not configured).
+    """
     groq_key = os.environ.get("GROQ_API_KEY")
     openai_key = os.environ.get("OPENAI_API_KEY")
 
@@ -69,7 +74,15 @@ def validate_startup() -> tuple[Optional[str], Optional[str]]:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     AUDIO_CACHE.mkdir(parents=True, exist_ok=True)
 
-    return groq_key, openai_key
+    # Initialize Clawdbot client (optional)
+    clawdbot_client = None
+    try:
+        clawdbot_client = ClawdbotClient.from_env()
+        print("[CONFIG] Clawdbot webhook: enabled")
+    except ValueError as e:
+        print(f"[WARN] Clawdbot webhook disabled: {e}")
+
+    return groq_key, openai_key, clawdbot_client
 
 # =============================================================================
 # Audit Logging
@@ -202,9 +215,10 @@ def claim_request(request_path: Path) -> Optional[Path]:
 def process_request(
     request_path: Path,
     groq_key: Optional[str],
-    openai_key: Optional[str]
+    openai_key: Optional[str],
+    clawdbot_client: Optional[ClawdbotClient] = None
 ):
-    """Process a single voice request."""
+    """Process a single voice request and notify Claudia."""
     request_id = request_path.stem
 
     # Idempotency check
@@ -273,6 +287,10 @@ def process_request(
     )
     audit("result_written", request_id, status=status, count=len(transcripts))
 
+    # Notify Claudia of transcription results
+    if transcripts:
+        notify_claudia(clawdbot_client, request_id, transcripts)
+
     # Cleanup inflight
     request_path.unlink(missing_ok=True)
 
@@ -298,6 +316,41 @@ def write_result(
     result_path = RESULTS_DIR / f"{request_id}.json"
     result_path.write_text(json.dumps(result, indent=2))
 
+
+# =============================================================================
+# Claudia Notification
+# =============================================================================
+
+def notify_claudia(
+    clawdbot_client: Optional[ClawdbotClient],
+    request_id: str,
+    transcripts: list,
+    deliver_to_telegram: bool = True
+):
+    """Notify Claudia of completed transcriptions via webhook.
+
+    Graceful degradation: logs warning if client not configured.
+    """
+    if not clawdbot_client:
+        print("[INFO] Clawdbot not configured, skipping Claudia notification")
+        return
+
+    if not transcripts:
+        audit("webhook_skipped", request_id, reason="no_transcripts")
+        return
+
+    try:
+        response = clawdbot_client.send_batch_summary(
+            transcripts=transcripts,
+            request_id=request_id,
+            deliver_to_telegram=deliver_to_telegram,
+        )
+        audit("webhook_sent", request_id, status=response.status, count=len(transcripts))
+        print(f"[NOTIFY] Sent {len(transcripts)} transcript(s) to Claudia: {response.status}")
+    except Exception as e:
+        audit("webhook_error", request_id, error=str(e))
+        print(f"[WARN] Failed to notify Claudia: {e}")
+
 # =============================================================================
 # Main Loop
 # =============================================================================
@@ -313,8 +366,9 @@ def main():
     print("[VPS-VOICE-RUNNER] Starting...")
 
     # Fail-fast validation
-    groq_key, openai_key = validate_startup()
+    groq_key, openai_key, clawdbot_client = validate_startup()
     print(f"[CONFIG] Groq: {'✓' if groq_key else '✗'}, OpenAI: {'✓' if openai_key else '✗'}")
+    print(f"[CONFIG] Clawdbot: {'✓' if clawdbot_client else '✗'}")
     print(f"[CONFIG] Watching: {REQUESTS_DIR}")
     print(f"[CONFIG] Results: {RESULTS_DIR}")
     print(f"[CONFIG] Telegram audio: {TELEGRAM_INBOUND}")
@@ -331,7 +385,7 @@ def main():
             inflight_path = claim_request(request_path)
             if inflight_path:
                 try:
-                    process_request(inflight_path, groq_key, openai_key)
+                    process_request(inflight_path, groq_key, openai_key, clawdbot_client)
                 except Exception as e:
                     audit("error", request_path.stem, error=str(e))
                     print(f"[ERROR] Processing {request_path.name}: {e}")
