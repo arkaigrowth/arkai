@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "$id": "https://arkai.dev/schemas/critic_evidence_bundle.schema.json",
+  "title": "Critic Evidence Bundle Contract",
+  "description": "Schema for deterministic evidence bundles in arkai triage pipeline. Pre-Gate computes all excerpts BEFORE Reader sees content, ensuring Reader cannot influence evidence collection.",
+  "version": "1.0.0",
+
+  "definitions": {
+    "CriticEvidenceBundle": {
+      "type": "object",
+      "description": "DETERMINISTIC evidence bundle computed by Pre-Gate. Contains all evidence that Reader/Critic will use for validation, computed BEFORE Reader processing to prevent manipulation.",
+      "required": [
+        "channel",
+        "sender",
+        "timestamp",
+        "first_200_normalized",
+        "last_200_normalized",
+        "link_domains",
+        "link_mismatch_flags",
+        "link_shortener_flags",
+        "has_attachments",
+        "attachment_types",
+        "quarantine_reasons",
+        "auth_risk_score",
+        "auth_signals"
+      ],
+      "properties": {
+        "channel": {
+          "type": "string",
+          "enum": ["gmail", "linkedin", "imessage", "telegram"],
+          "description": "Communication channel where this message originated"
+        },
+        "sender": {
+          "type": "string",
+          "description": "Sender identifier (email address, handle, phone number, etc.)"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp when message was received"
+        },
+        "subject": {
+          "type": ["string", "null"],
+          "description": "Message subject line (null for channels without subjects like SMS)"
+        },
+        "first_200_normalized": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "First 200 characters of message body, normalized (whitespace collapsed, HTML stripped). Pre-computed by Pre-Gate BEFORE Reader sees content."
+        },
+        "last_200_normalized": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Last 200 characters of message body, normalized. Pre-computed to detect unsubscribe links and footer patterns without Reader influence."
+        },
+        "link_domains": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of all unique domains extracted from links in the message (e.g., ['example.com', 'bit.ly']). HTML-parsed by Pre-Gate.",
+          "default": []
+        },
+        "link_mismatch_flags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Flags for links where display text != actual href (e.g., 'paypal.com displayed but links to phishing-site.ru'). Empty array means no mismatches detected.",
+          "default": []
+        },
+        "link_shortener_flags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Flags for known URL shortener domains (bit.ly, tinyurl.com, etc.) which can obscure destination. Empty array means no shorteners detected.",
+          "default": []
+        },
+        "has_attachments": {
+          "type": "boolean",
+          "description": "Whether the message contains any attachments"
+        },
+        "attachment_types": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "MIME types or file extensions of attachments (e.g., ['application/pdf', '.exe', 'image/png']). Empty array if no attachments.",
+          "default": []
+        },
+        "quarantine_reasons": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Hard quarantine reasons if Pre-Gate blocked the message (e.g., 'executable_attachment', 'known_malware_domain'). Empty array means passed Pre-Gate checks.",
+          "default": []
+        },
+        "auth_risk_score": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Authentication risk score (0.0 = low risk, 1.0 = high risk). Used for SORTING only, not hard blocking. Computed from DKIM/SPF/DMARC/sender reputation."
+        },
+        "auth_signals": {
+          "type": "object",
+          "description": "Structured authentication signals used to compute auth_risk_score. Keys vary by channel (e.g., DKIM/SPF/DMARC for email, verified badge for social).",
+          "additionalProperties": true
+        },
+        "proposed_action": {
+          "type": ["string", "null"],
+          "description": "Action proposed by Reader after classification (e.g., 'add_label:arkai/Priority', 'archive'). Null if Reader hasn't processed yet.",
+          "default": null
+        },
+        "proposed_reply_draft": {
+          "type": ["string", "null"],
+          "description": "Draft reply content proposed by Reader (if Reader suggested a reply). Null if no reply proposed.",
+          "maxLength": 2000,
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "AuthSignalsEmail": {
+      "type": "object",
+      "description": "Example auth_signals structure for Gmail channel. Other channels use different signals.",
+      "properties": {
+        "dkim": {
+          "type": "string",
+          "enum": ["pass", "fail", "none"],
+          "description": "DKIM signature validation result"
+        },
+        "spf": {
+          "type": "string",
+          "enum": ["pass", "fail", "softfail", "neutral", "none"],
+          "description": "SPF validation result"
+        },
+        "dmarc": {
+          "type": "string",
+          "enum": ["pass", "fail", "none"],
+          "description": "DMARC policy validation result"
+        },
+        "sender_in_contacts": {
+          "type": "boolean",
+          "description": "Whether sender is in user's contact list"
+        },
+        "sender_interaction_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of previous interactions with this sender (0 = first time)"
+        },
+        "domain_age_days": {
+          "type": ["integer", "null"],
+          "description": "Age of sender domain in days (null if unknown)"
+        }
+      },
+      "additionalProperties": true
+    },
+
+    "CriticVerdict": {
+      "type": "object",
+      "description": "Critic's validation verdict after comparing Reader output against evidence bundle.",
+      "required": ["verdict", "confidence", "reasoning"],
+      "properties": {
+        "verdict": {
+          "type": "string",
+          "enum": ["APPROVE", "REJECT", "ESCALATE"],
+          "description": "Critic decision: APPROVE = execute Reader's actions, REJECT = block, ESCALATE = human review needed"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Critic's confidence in this verdict (0.0-1.0)"
+        },
+        "reasoning": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Explanation of why Critic made this decision, referencing evidence bundle"
+        },
+        "evidence_flags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Specific evidence items that influenced the verdict (e.g., 'link_mismatch_detected', 'auth_risk_high', 'Reader_proposed_unsafe_action')",
+          "default": []
+        },
+        "modified_actions": {
+          "type": ["array", "null"],
+          "items": { "type": "string" },
+          "description": "If verdict=APPROVE but with modifications, list the modified actions here. Null if no modifications.",
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+
+  "examples": [
+    {
+      "channel": "gmail",
+      "sender": "newsletter@company.com",
+      "timestamp": "2026-01-26T14:30:00Z",
+      "subject": "Weekly Tech Digest - January 26",
+      "first_200_normalized": "Hi Alex, Here are this week's top tech stories: 1. New AI framework released 2. Major security vulnerability patched 3. Open source project hits 1M stars. Read more below...",
+      "last_200_normalized": "...Thanks for reading! Unsubscribe: https://company.com/unsubscribe?id=abc123 | Update preferences: https://company.com/prefs | Company Inc, 123 Main St, City, ST 12345",
+      "link_domains": ["company.com", "youtube.com", "github.com"],
+      "link_mismatch_flags": [],
+      "link_shortener_flags": [],
+      "has_attachments": false,
+      "attachment_types": [],
+      "quarantine_reasons": [],
+      "auth_risk_score": 0.1,
+      "auth_signals": {
+        "dkim": "pass",
+        "spf": "pass",
+        "dmarc": "pass",
+        "sender_in_contacts": false,
+        "sender_interaction_count": 47,
+        "domain_age_days": 2847
+      },
+      "proposed_action": "add_label:arkai/Newsletter",
+      "proposed_reply_draft": null
+    },
+    {
+      "channel": "gmail",
+      "sender": "security@paypal-verify.ru",
+      "timestamp": "2026-01-26T14:35:00Z",
+      "subject": "URGENT: Verify your account now",
+      "first_200_normalized": "Dear customer, We detected unusual activity on your PayPal account. Click here to verify: http://paypal-verify.ru/confirm?id=xyz. Your account will be suspended in 24 hours if...",
+      "last_200_normalized": "...you do not verify immediately. PayPal Security Team. (This is not a real PayPal email, clearly a phishing attempt based on domain mismatch)",
+      "link_domains": ["paypal-verify.ru"],
+      "link_mismatch_flags": ["Display text 'PayPal' links to paypal-verify.ru (not paypal.com)"],
+      "link_shortener_flags": [],
+      "has_attachments": false,
+      "attachment_types": [],
+      "quarantine_reasons": ["domain_mismatch_phishing", "spoofed_brand_name"],
+      "auth_risk_score": 0.95,
+      "auth_signals": {
+        "dkim": "none",
+        "spf": "fail",
+        "dmarc": "fail",
+        "sender_in_contacts": false,
+        "sender_interaction_count": 0,
+        "domain_age_days": 3
+      },
+      "proposed_action": null,
+      "proposed_reply_draft": null
+    }
+  ]
+}
