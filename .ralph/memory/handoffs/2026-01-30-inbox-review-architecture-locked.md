@@ -70,8 +70,9 @@ These override any score and immediately quarantine the email:
 
 ```python
 HARD_QUARANTINE_RULES = [
-    ("sender_not_exact_match",
-     lambda e: e.from_address.lower() not in LINKEDIN_VALID_SENDERS),
+    # Sender domain is NOT linkedin.com at all
+    ("sender_wrong_domain",
+     lambda e: not extract_email_address(e.from_header).endswith("@linkedin.com")),
 
     ("reply_to_mismatch",
      lambda e: e.reply_to and e.reply_to.lower() != e.from_address.lower()),
@@ -84,9 +85,10 @@ HARD_QUARANTINE_RULES = [
 ]
 ```
 
-**NOT a hard quarantine (soft signal only):**
-- missing_auth_headers (Gmail headers unreliable)
-- missing_security_footer (soft signal)
+**NOT a hard quarantine:**
+- `sender_not_exact_match` → goes to REVIEW tier (see Section 19)
+- `missing_auth_headers` → soft signal only
+- `missing_security_footer` → soft signal only
 
 ---
 
@@ -218,7 +220,12 @@ LinkedIn shorteners can be spoofed. Proceed with caution.
 **Source of truth:** `~/.arkai/runs/{run_id}/events.jsonl`
 **NOT a state machine** in MVP
 
-Output: `~/Obsidian/Inbox/{date}.md`
+**Output path formula:**
+```
+{vault_path}/{inbox_root}/{YYYY-MM-DD}.md
+```
+
+Example: `~/Obsidian/MainVault/00-Inbox/Digest/2026-01-30.md`
 
 ---
 
@@ -311,15 +318,15 @@ def normalize_for_risk_detection(raw_content: str) -> str:
 
 ## 18. CONFIG.YAML (FINAL - ADHD-OPTIMIZED)
 
-Single config file. No sprawl. Absolute paths.
+Single config file. No sprawl. Tilde allowed (expanded at runtime).
 
 ```yaml
 # ~/.arkai/config.yaml
 
 obsidian:
   enabled: true
-  vault_path: /Users/olek/Obsidian/MainVault  # Absolute, no ~
-  inbox_root: 00-Inbox/Digest                  # Relative to vault
+  vault_path: ~/Obsidian/MainVault    # ~ allowed, expanded at runtime
+  inbox_root: 00-Inbox/Digest          # Relative to vault
 
 linkedin:
   exact_pass:
@@ -335,8 +342,21 @@ linkedin:
 ## 19. LINKEDIN SENDER TIERS (FINAL)
 
 ```python
-def evaluate_sender(email: str) -> tuple[str, list[str]]:
-    sender = email.lower()
+import re
+
+def extract_email_address(from_header: str) -> str:
+    """
+    Extract email from From header.
+    'LinkedIn <notifications-noreply@linkedin.com>' -> 'notifications-noreply@linkedin.com'
+    'notifications-noreply@linkedin.com' -> 'notifications-noreply@linkedin.com'
+    """
+    match = re.search(r'<([^>]+)>', from_header)
+    if match:
+        return match.group(1).lower()
+    return from_header.strip().lower()
+
+def evaluate_sender(from_header: str) -> tuple[str, list[str]]:
+    sender = extract_email_address(from_header)
 
     # Tier 1: PASS (exact match from config)
     if sender in config["linkedin"]["exact_pass"]:
@@ -371,27 +391,28 @@ def evaluate_sender(email: str) -> tuple[str, list[str]]:
 
 ## 21. CONFIG VALIDATION (LIGHTWEIGHT)
 
-No JSON schema. Runtime checks only:
+No JSON schema. Runtime checks only. Tilde is allowed and expanded.
 
 ```python
+from pathlib import Path
+
 def validate_config(config: dict) -> list[str]:
     errors = []
 
     if config.get("obsidian", {}).get("enabled"):
         vault_path = config["obsidian"].get("vault_path", "")
 
-        # Must be absolute (no ~)
-        if vault_path.startswith("~"):
-            errors.append(f"vault_path must be absolute")
+        # Expand ~ and resolve to absolute
+        resolved_path = Path(vault_path).expanduser().resolve()
 
-        # Must exist
-        if not Path(vault_path).exists():
-            errors.append(f"vault_path does not exist: {vault_path}")
+        # Must exist after expansion
+        if not resolved_path.exists():
+            errors.append(f"vault_path does not exist: {resolved_path}")
 
-        # inbox_root must be relative
+        # inbox_root must be relative (no leading /)
         inbox_root = config["obsidian"].get("inbox_root", "")
         if inbox_root.startswith("/"):
-            errors.append(f"inbox_root must be relative")
+            errors.append(f"inbox_root must be relative (got: {inbox_root})")
 
     return errors
 ```
@@ -430,6 +451,35 @@ def validate_config(config: dict) -> list[str]:
 | Clear naming | `Digest` not `Unified` |
 | Immediate feedback | Runtime validation, no schema |
 | Start minimal | Add complexity when real data shows need |
+
+---
+
+## 24. CANONICAL PATHS (USE THESE EVERYWHERE)
+
+All paths use `~` for generalizability. Expand at runtime with `Path.expanduser()`.
+
+| Purpose | Path | Notes |
+|---------|------|-------|
+| **Config** | `~/.arkai/config.yaml` | Single source of config |
+| **Event Store** | `~/.arkai/runs/{run_id}/events.jsonl` | JSONL is source of truth |
+| **Catalog** | `~/.arkai/catalog.json` | Content index |
+| **Voice Queue** | `~/.arkai/voice_queue.jsonl` | Voice memo queue |
+| **Voice Cache** | `~/.arkai/voice_cache/` | Transcription cache |
+| **Obsidian Digest** | `{vault_path}/{inbox_root}/{YYYY-MM-DD}.md` | View layer only |
+| **arkai repo** | `~/AI/arkai/` | Main monorepo |
+| **arkai-gmail** | `~/AI/arkai-gmail/` | Separate repo (existing) |
+| **Services** | `~/AI/arkai/services/` | Python services (voice/, inbox/) |
+| **Contracts** | `~/AI/arkai/contracts/` | JSON schemas |
+
+**Runtime expansion:**
+```python
+from pathlib import Path
+
+config_path = Path("~/.arkai/config.yaml").expanduser()
+vault_path = Path(config["obsidian"]["vault_path"]).expanduser().resolve()
+```
+
+**Never hardcode usernames** (no `/Users/alexkamysz/`, no `/Users/olek/`).
 
 ---
 
