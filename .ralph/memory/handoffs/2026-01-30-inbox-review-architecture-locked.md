@@ -307,4 +307,130 @@ def normalize_for_risk_detection(raw_content: str) -> str:
 
 ---
 
+---
+
+## 18. CONFIG.YAML (FINAL - ADHD-OPTIMIZED)
+
+Single config file. No sprawl. Absolute paths.
+
+```yaml
+# ~/.arkai/config.yaml
+
+obsidian:
+  enabled: true
+  vault_path: /Users/olek/Obsidian/MainVault  # Absolute, no ~
+  inbox_root: 00-Inbox/Digest                  # Relative to vault
+
+linkedin:
+  exact_pass:
+    - notifications-noreply@linkedin.com
+    - messages-noreply@linkedin.com
+    - invitations@linkedin.com
+    - jobs-noreply@linkedin.com
+  domain_review: "@linkedin.com"
+```
+
+---
+
+## 19. LINKEDIN SENDER TIERS (FINAL)
+
+```python
+def evaluate_sender(email: str) -> tuple[str, list[str]]:
+    sender = email.lower()
+
+    # Tier 1: PASS (exact match from config)
+    if sender in config["linkedin"]["exact_pass"]:
+        return ("PASS", [])
+
+    # Tier 2: REVIEW (linkedin.com domain but unknown sender)
+    if sender.endswith(config["linkedin"]["domain_review"]):
+        return ("REVIEW", ["sender_not_in_exact_allowlist"])
+
+    # Tier 3: QUARANTINE (wrong domain entirely)
+    return ("QUARANTINE", ["sender_wrong_domain"])
+```
+
+---
+
+## 20. OBSIDIAN STRUCTURE (MINIMAL)
+
+```
+00-Inbox/
+├── Digest/              # Daily digests (MVP)
+│   └── 2026-01-30.md
+└── Quarantine/          # Hard quarantines (add later if needed)
+```
+
+**NOT building (avoid until real usage data):**
+- ❌ Channels/
+- ❌ Queue/
+- ❌ Archive/
+- ❌ Routing rules
+
+---
+
+## 21. CONFIG VALIDATION (LIGHTWEIGHT)
+
+No JSON schema. Runtime checks only:
+
+```python
+def validate_config(config: dict) -> list[str]:
+    errors = []
+
+    if config.get("obsidian", {}).get("enabled"):
+        vault_path = config["obsidian"].get("vault_path", "")
+
+        # Must be absolute (no ~)
+        if vault_path.startswith("~"):
+            errors.append(f"vault_path must be absolute")
+
+        # Must exist
+        if not Path(vault_path).exists():
+            errors.append(f"vault_path does not exist: {vault_path}")
+
+        # inbox_root must be relative
+        inbox_root = config["obsidian"].get("inbox_root", "")
+        if inbox_root.startswith("/"):
+            errors.append(f"inbox_root must be relative")
+
+    return errors
+```
+
+---
+
+## 22. DIGEST FORMAT (WITH EVENT POINTERS)
+
+```markdown
+# Inbox Digest - 2026-01-30
+
+## 📌 Action Needed
+
+### John Smith (LinkedIn) - 2h ago
+- **Summary:** Wants to discuss your post about...
+- **Draft:** Hey John! Thanks for reaching out...
+- **Link:** `linkedin.com` [^evt-abc123]
+
+> [!info]- Full URL (audit)
+> https://www.linkedin.com/messaging/thread/2-xxx
+
+---
+*Source: ~/.arkai/runs/inbox-2026-01-30/events.jsonl*
+
+[^evt-abc123]: Event ID: abc123
+```
+
+---
+
+## 23. ADHD OPTIMIZATION PRINCIPLES
+
+| Principle | Implementation |
+|-----------|----------------|
+| One source of truth | `config.yaml` (config), JSONL (data) |
+| No decision fatigue | One folder (`Digest/`), no routing |
+| Clear naming | `Digest` not `Unified` |
+| Immediate feedback | Runtime validation, no schema |
+| Start minimal | Add complexity when real data shows need |
+
+---
+
 *This handoff is authoritative. If any implementation contradicts these decisions, refer back here.*
