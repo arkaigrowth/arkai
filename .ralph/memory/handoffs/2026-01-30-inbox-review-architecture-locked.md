@@ -284,12 +284,12 @@ def normalize_for_risk_detection(raw_content: str) -> str:
 ## 15. NEXT SESSION CHECKLIST
 
 1. [x] **Add `arkai-gmail export` command** ✅ DONE (c783bea) - exports message as raw JSON for fixtures
-2. [ ] Create services/inbox/ directory structure
-3. [ ] Create pyproject.toml with dependencies
-4. [ ] Implement normalize.py + tests
-5. [ ] Implement quarantine.py + tests
-6. [ ] Implement url_extractor.py (BeautifulSoup) + tests
-7. [ ] Create critic_evidence_bundle.schema.json
+2. [x] Create services/inbox/ directory structure ✅ DONE (2e9bbb2)
+3. [x] Create pyproject.toml with dependencies ✅ DONE
+4. [x] Implement normalize.py + tests ✅ DONE (39 tests, 100% coverage)
+5. [x] Implement quarantine.py + tests ✅ DONE (34 tests)
+6. [x] Implement url_extractor.py (BeautifulSoup) + tests ✅ DONE (44 tests)
+7. [x] Create critic_evidence_bundle.schema.json ✅ DONE
 8. [ ] Export 10 real LinkedIn notifications + 5 spoofs as fixtures
 9. [ ] Implement CLI triage loop
 
