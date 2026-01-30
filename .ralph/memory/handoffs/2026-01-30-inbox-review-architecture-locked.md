@@ -283,7 +283,7 @@ def normalize_for_risk_detection(raw_content: str) -> str:
 
 ## 15. NEXT SESSION CHECKLIST
 
-1. [ ] **Add `arkai-gmail export` command** (5 min) - exports message as raw JSON for fixtures
+1. [x] **Add `arkai-gmail export` command** ✅ DONE (c783bea) - exports message as raw JSON for fixtures
 2. [ ] Create services/inbox/ directory structure
 3. [ ] Create pyproject.toml with dependencies
 4. [ ] Implement normalize.py + tests
