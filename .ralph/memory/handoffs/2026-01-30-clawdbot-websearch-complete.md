@@ -92,3 +92,6 @@ Or update ARKAI.md with clearer path.
 Allowlist: `git log, git status, git diff, git branch, ls, cat, head, tail, wc, find, grep, pwd, whoami, date, uptime`
 
 **Gateway restart needed** to pick up bash config change.
+
+## ✅ Fixed: ARKAI.md Path Clarity
+Changed to absolute path `/home/clawdbot/arkai/docs/ROADMAP.md` with explicit `cat` command.
