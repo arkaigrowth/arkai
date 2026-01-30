@@ -74,3 +74,21 @@ Telegram → VPS (Claudia) → Remote Skill → Mac → memo CLI → Apple Notes
 - Install `memo` CLI on Mac: `brew install memoapp/tap/memo`
 - Configure remote skills in Clawdbot
 - Add to Security Hardening backlog
+
+## Issue: Claudia Can't Find Roadmap
+
+**Problem:** She looks in `~/clawd/` but roadmap is at `~/arkai/docs/ROADMAP.md`
+
+**Fix needed:** Tell her explicitly:
+```
+The roadmap is at ~/arkai/docs/ROADMAP.md (not in your ~/clawd/ workspace).
+Use: cat ~/arkai/docs/ROADMAP.md
+```
+
+Or update ARKAI.md with clearer path.
+
+## Bash Enabled (Read-Only)
+
+Allowlist: `git log, git status, git diff, git branch, ls, cat, head, tail, wc, find, grep, pwd, whoami, date, uptime`
+
+**Gateway restart needed** to pick up bash config change.
