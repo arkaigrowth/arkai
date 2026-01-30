@@ -1,0 +1,68 @@
+{
+  "id": "18d5a2b3c4d5e6f7",
+  "threadId": "18d5a2b3c4d5e6f7",
+  "labelIds": ["INBOX", "UNREAD", "CATEGORY_UPDATES"],
+  "snippet": "Hi Alex, You have a new connection request from John Smith. linkedin.com/confirm View and respond to your invitation.",
+  "historyId": "12345678",
+  "internalDate": "1706540400000",
+  "sizeEstimate": 4521,
+  "payload": {
+    "partId": "",
+    "mimeType": "multipart/alternative",
+    "filename": "",
+    "headers": [
+      {"name": "Delivered-To", "value": "alex@example.com"},
+      {"name": "Received", "value": "by 2002:a05:6214:20a3:0:0:0:0 with SMTP id 3csp123456wrz; Mon, 29 Jan 2024 10:00:00 -0800 (PST)"},
+      {"name": "X-Google-DKIM-Signature", "value": "v=1; a=rsa-sha256; c=relaxed/relaxed; d=1e100.net; s=20230601; t=1706540400"},
+      {"name": "X-Received", "value": "by 2002:a05:6214:20a3:b0:6c3:1234:5678 with SMTP id abc123; Mon, 29 Jan 2024 10:00:00 -0800 (PST)"},
+      {"name": "ARC-Seal", "value": "i=1; a=rsa-sha256; t=1706540400; cv=none"},
+      {"name": "ARC-Message-Signature", "value": "i=1; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20160816"},
+      {"name": "ARC-Authentication-Results", "value": "i=1; mx.google.com; dkim=pass header.i=@linkedin.com header.s=proddkim1024"},
+      {"name": "Return-Path", "value": "<bounce-0123456789@bounce.linkedin.com>"},
+      {"name": "Received-SPF", "value": "pass (google.com: domain of bounce-0123456789@bounce.linkedin.com designates 108.174.0.0 as permitted sender)"},
+      {"name": "Authentication-Results", "value": "mx.google.com; dkim=pass header.i=@linkedin.com header.s=proddkim1024; spf=pass (google.com: domain of bounce-0123456789@bounce.linkedin.com designates 108.174.0.0 as permitted sender)"},
+      {"name": "DKIM-Signature", "value": "v=1; a=rsa-sha256; c=relaxed/relaxed; d=linkedin.com; s=proddkim1024; t=1706540400"},
+      {"name": "Date", "value": "Mon, 29 Jan 2024 18:00:00 +0000"},
+      {"name": "From", "value": "LinkedIn <notifications-noreply@linkedin.com>"},
+      {"name": "To", "value": "alex@example.com"},
+      {"name": "Message-ID", "value": "<1234567890.1706540400@linkedin.com>"},
+      {"name": "Subject", "value": "You have a new connection request"},
+      {"name": "MIME-Version", "value": "1.0"},
+      {"name": "Content-Type", "value": "multipart/alternative; boundary=\"----=_Part_12345_1234567890.1706540400000\""},
+      {"name": "X-LinkedIn-Class", "value": "INVITE-RECEIVED"},
+      {"name": "X-LinkedIn-Template", "value": "invite_received_email"},
+      {"name": "List-Unsubscribe", "value": "<https://www.linkedin.com/e/v2?e=abc123&t=lun&midToken=AQF>"}
+    ],
+    "body": {
+      "size": 0
+    },
+    "parts": [
+      {
+        "partId": "0",
+        "mimeType": "text/plain",
+        "filename": "",
+        "headers": [
+          {"name": "Content-Type", "value": "text/plain; charset=\"UTF-8\""},
+          {"name": "Content-Transfer-Encoding", "value": "quoted-printable"}
+        ],
+        "body": {
+          "size": 180,
+          "data": "SGkgQWxleCwKCllvdSBoYXZlIGEgbmV3IGNvbm5lY3Rpb24gcmVxdWVzdCBmcm9tIEpvaG4gU21pdGguCgpsaW5rZWRpbi5jb20vY29uZmlybQoKVmlldyBhbmQgcmVzcG9uZCB0byB5b3VyIGludml0YXRpb24uCgpUaGFua3MsClRoZSBMaW5rZWRJbiBUZWFt"
+        }
+      },
+      {
+        "partId": "1",
+        "mimeType": "text/html",
+        "filename": "",
+        "headers": [
+          {"name": "Content-Type", "value": "text/html; charset=\"UTF-8\""},
+          {"name": "Content-Transfer-Encoding", "value": "base64"}
+        ],
+        "body": {
+          "size": 412,
+          "data": "PFwhRE9DVFlQRSBodG1sPjxodG1sPjxoZWFkPjwvaGVhZD48Ym9keT48cD5IaSBBbGV4LDwvcD48cD5Zb3UgaGF2ZSBhIG5ldyBjb25uZWN0aW9uIHJlcXVlc3QgZnJvbSBKb2huIFNtaXRoLjwvcD48cD48YSBocmVmPSJodHRwczovL2V2aWwtbGlua2VkaW4ucnUvY29uZmlybT90b2tlbj1hYmMxMjMiPmxpbmtlZGluLmNvbS9jb25maXJtPC9hPjwvcD48cD5WaWV3IGFuZCByZXNwb25kIHRvIHlvdXIgaW52aXRhdGlvbi48L3A+PHA+VGhhbmtzLDxicj5UaGUgTGlua2VkSW4gVGVhbTwvcD48L2JvZHk+PC9odG1sPg=="
+        }
+      }
+    ]
+  }
+}
