@@ -267,6 +267,77 @@
 
 ---
 
+## Obsidian Vault Integration
+
+> **Vault location**: `~/AI/arkai/vault-sandbox/`
+> **Session handoff**: `.ralph/memory/handoffs/2026-01-20-obsidian-session5.md`
+
+### High Priority
+- [ ] **Email Triage Storage** - Where to store triaged emails in vault
+  - Options: `00-Inbox/Email/`, `CATSY/Email/`, dedicated `EMAIL/` folder
+  - Consider: searchability, auto-organization, Graph View connections
+
+- [ ] **Install Periodic Notes Calendar** (luiisca)
+  - Via BRAT: `luiisca/obsidian-periodic-notes-calendar`
+  - Features: weekly/monthly/yearly views, mobile support, full Periodic Notes integration
+
+- [ ] **Install CAO Plugin** - In-Obsidian Claude chat
+  - Conversations become searchable notes
+  - API key required
+
+### Medium Priority
+- [ ] **Build Session Logger Hook** - Auto-save Claude Code sessions to vault
+  - `~/.claude/hooks/post-session.sh`
+  - `~/.claude/scripts/jsonl_to_md.py`
+  - Output to `vault/Claude Sessions/`
+
+- [ ] **Homepage Dashboard Improvements**
+  - Heatmap Calendar plugin
+  - Obsidian Charts for visualizations
+  - Progress bars (CSS snippets)
+
+- [ ] **Todoist Integration** - Plugin already installed, needs config
+
+### Low Priority / Future
+- [ ] PARA Areas Implementation (Health, Finance, Career, etc.)
+- [ ] Graph View optimization (auto-linking, MOC pages)
+- [ ] Score system with existing rubric (`scout_outputs/research/obsidian-reorg/SCORING_RUBRIC.md`)
+
+### Completed (Session 5)
+- [x] Weekly note format: `YYYY-[W]ww--MMM-DD` (e.g., `2026-W04--Jan-19.md`)
+- [x] Daily note format: `MM-DD-yyyy-ddd` with filename-based navigation
+- [x] Empty task filtering across all queries
+- [x] Homepage fixes (weekly link, null checks)
+- [x] Templater folder templates for DAILY/WEEKLY NOTES
+
+---
+
+## Integrations Backlog
+
+> **Pattern:** All integrations follow Reader/Critic/Actor security model.
+> **Remote skills:** Mac-only tools accessed via Clawdbot remote skill execution.
+
+### Apple Notes
+- [ ] Install `memo` CLI on Mac (`brew install memoapp/tap/memo`)
+- [ ] Configure Mac as remote skill node for Clawdbot
+- [ ] Read-only access first (list, view)
+- [ ] Folder allowlist (specific notebooks only)
+- [ ] Notes treated as untrusted input
+
+### Slack
+- [ ] Enable Slack plugin on VPS
+- [ ] Configure bot token + app token
+- [ ] Test voice memo transcription (Slack built-in)
+- [ ] Channel allowlist
+
+### Future Integrations (Ideas)
+- [ ] Apple Reminders (`remindctl` CLI)
+- [ ] Bear Notes (`grizzly` CLI)
+- [ ] Things 3 (`things` CLI)
+- [ ] Calendar access
+
+---
+
 ## Future / Exploratory
 
 - [ ] Real-time transcription (streaming diarization)

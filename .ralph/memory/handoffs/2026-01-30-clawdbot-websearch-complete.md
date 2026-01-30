@@ -54,3 +54,23 @@ python3 -c "import json; print(json.dumps(json.load(open('/home/clawdbot/.clawdb
 # Test sanitizer
 python3 ~/clawd/security/provenance/sanitizer.py
 ```
+
+## Future Integration: Apple Notes
+
+**Skill:** `apple-notes` (bundled, requires `memo` CLI on macOS)
+
+**Architecture:**
+```
+Telegram → VPS (Claudia) → Remote Skill → Mac → memo CLI → Apple Notes
+```
+
+**Security requirements:**
+- Read-only first (list, view only)
+- Notes treated as untrusted input (Reader/Critic/Actor)
+- Folder allowlist (specific notebooks only)
+- Mac must be online
+
+**Prerequisites:**
+- Install `memo` CLI on Mac: `brew install memoapp/tap/memo`
+- Configure remote skills in Clawdbot
+- Add to Security Hardening backlog
