@@ -1,6 +1,6 @@
 # arkai Roadmap
 
-> **Last Updated**: 2026-01-17 | **Maintainer**: Alex + Claude + Chad
+> **Last Updated**: 2026-01-30 | **Maintainer**: Alex + Claude + Chad
 
 ---
 
@@ -185,6 +185,88 @@
 
 ---
 
+## Security Hardening (Cross-Cutting)
+
+> **Authority**: `docs/SECURITY_POSTURE.md` is the canonical security document.
+> **Tracking**: Security tickets use `.ralph/memory/tickets/` with `SECURITY_` prefix.
+> **Pattern**: All content processing follows Reader/Critic/Actor split.
+
+### Phase 0: VPS Hardening (✅ DONE)
+*Ticket: PHASE0_HARDEN | Status: DONE*
+
+- [x] Create olek-admin user with sudo
+- [x] Remove clawdbot from sudoers
+- [x] Remove clawdbot from docker group
+- [x] Create arkai-exec user with explicit permissions
+- [x] MVP egress filtering (iptables allowlist)
+- [x] Verify Claudia still responds after iptables
+
+### Phase 1: Web Search Security (🔒 NEW)
+*Ticket: TBD | Status: BACKLOG*
+
+**Implemented (2026-01-30):**
+- [x] Enable web_search via Perplexity Sonar (OpenRouter)
+- [x] Enable web_fetch with 30k char limit
+- [x] Create injection pattern blocklist (`~/clawd/security/provenance/blocklist.txt`)
+- [x] Create Python sanitizer module (`~/clawd/security/provenance/sanitizer.py`)
+- [x] Initialize audit log (`~/clawd/memory/web_audit.jsonl`)
+- [x] Add behavioral guidelines to Claudia's SOUL.md
+
+**Hardening Backlog:**
+- [ ] **Hook Integration**: Auto-sanitize all web results via OpenClaw hooks
+  - Intercept web_search/web_fetch tool results
+  - Apply sanitizer.py before content reaches agent
+  - Log all fetches to audit trail
+- [ ] **Domain Allowlist Mode**: Restrict to trusted domains
+  - Configurable allowlist (Wikipedia, official docs, etc.)
+  - Toggle between open/restricted modes
+  - Audit log for blocked domain attempts
+- [ ] **Provenance Wrapper**: Tag external content inline
+  - `⟦WEB:hash⟧...⟦/WEB:hash⟧` markers in content
+  - Hash → source mapping for traceability
+  - Detect if response references external content
+- [ ] **Double-Check Mode**: Human approval for suspicious content
+  - Flag content matching blocklist patterns (even after redaction)
+  - Queue for human review before acting on flagged content
+  - Threshold configuration (auto-approve low-risk, review high-risk)
+- [ ] **Rate Limiting**: Prevent search abuse/reconnaissance
+  - Per-session search limits
+  - Cooldown between rapid searches
+  - Alert on unusual search patterns
+
+### Phase 2: Sandbox Hardening (📋 PLANNED)
+*Referenced in: v1.3 RLM Integration*
+
+- [ ] CostTracker middleware (token counting per provider)
+- [ ] BudgetManager (per-run limits: tokens, dollars, calls)
+- [ ] Sandbox hardening (RLIMIT_*, env scrub, import blocklist)
+- [ ] 80% warning + HITL escalation
+
+### Phase 3: Content Processing Security (📋 PLANNED)
+*Referenced in: v1.4 Voice, v1.5 Gmail*
+
+- [ ] Voice security gate (path validation, limits)
+- [ ] Gmail 7-layer security architecture
+- [ ] Reader/Critic/Actor separation verified for all pipelines
+- [ ] Audit logging enabled (append-only JSONL)
+
+### Phase 4: Bash Access (🚫 BLOCKED)
+*Prerequisite: ALL above phases complete*
+
+> **DO NOT ENABLE BASH FOR CLAUDIA** until:
+> 1. ✅ Phase 0: VPS hardening complete
+> 2. ⬜ Phase 1: Web search hardening complete
+> 3. ⬜ Phase 2: Sandbox hardening complete
+> 4. ⬜ Phase 3: Content processing security complete
+
+- [ ] Firejail sandbox configuration
+- [ ] Read-only mounts by default
+- [ ] Network isolation (--net=none)
+- [ ] Command allowlist (no arbitrary execution)
+- [ ] Timeout enforcement (30s max)
+
+---
+
 ## Future / Exploratory
 
 - [ ] Real-time transcription (streaming diarization)
@@ -207,3 +289,6 @@
 | 2026-01-18 | richardwhiteii/rlm as base | True REPL-over-context MCP, not map/reduce orchestration |
 | 2026-01-18 | Two-lane model routing | Claude Max (subscription) + OpenRouter (paid API) pattern from steelman |
 | 2026-01-18 | Chunk IDs = sha256(artifact + strategy + offsets) | Deterministic, stable, strategy-versioned |
+| 2026-01-30 | Web search via Perplexity Sonar (OpenRouter) | Uses existing auth, AI-synthesized answers safer than raw HTML |
+| 2026-01-30 | Security Hardening as cross-cutting section | Aggregates security items from all versions for visibility |
+| 2026-01-30 | Provenance tracking for web content | Hash-based audit trail enables tracing content influence |
