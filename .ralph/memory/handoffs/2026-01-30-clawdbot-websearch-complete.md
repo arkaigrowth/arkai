@@ -95,3 +95,17 @@ Allowlist: `git log, git status, git diff, git branch, ls, cat, head, tail, wc, 
 
 ## ✅ Fixed: ARKAI.md Path Clarity
 Changed to absolute path `/home/clawdbot/arkai/docs/ROADMAP.md` with explicit `cat` command.
+
+---
+
+## Next Session TODO
+
+1. **Test Claudia's bash access** - Ask her to run `git log --oneline -5` on ~/arkai
+2. **Test roadmap reading** - `/new` then ask her to read the roadmap
+3. **Verify web search still works** - Quick search test
+4. **Slack integration** - Enable if desired
+5. **Brave API fallback** - Add key for search redundancy
+6. **Hook integration** - Auto-sanitize web results (Security Phase 1 backlog)
+
+**Tell Claudia after /new:**
+> "You now have read-only bash. Try: `cat /home/clawdbot/arkai/docs/ROADMAP.md`"
