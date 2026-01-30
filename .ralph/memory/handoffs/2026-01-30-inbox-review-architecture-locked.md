@@ -494,3 +494,120 @@ vault_path = Path(config["obsidian"]["vault_path"]).expanduser().resolve()
 ---
 
 *This handoff is authoritative. If any implementation contradicts these decisions, refer back here.*
+
+---
+
+## 25. INTEGRATION CONTRACTS (LOCKED - 2026-01-30)
+
+**Files added:** `services/inbox/src/arkai_inbox/models.py`, `audit.py`
+
+### EmailRecord (Ingestion Output)
+
+```python
+@dataclass
+class EmailRecord:
+    message_id: str       # Gmail API message ID
+    thread_id: str
+    from_header: str      # "LinkedIn <notifications-noreply@linkedin.com>"
+    to: list[str]
+    subject: str | None
+    date: datetime
+    reply_to: str | None = None
+    snippet: str = ""
+    html_body: str | None = None
+    text_body: str | None = None
+    has_attachments: bool = False
+    attachment_types: list[str] = field(default_factory=list)
+    labels: list[str] = field(default_factory=list)
+    channel: Literal["gmail", "linkedin", "imessage", "telegram"] = "gmail"
+    raw_headers: dict[str, str] = field(default_factory=dict)
+```
+
+### create_evidence_bundle() Pipeline
+
+```
+EmailRecord ──► create_evidence_bundle() ──► CriticEvidenceBundle
+                       │
+                       ├── normalize.py (first_200, last_200)
+                       ├── url_extractor.py (links, mismatches, shorteners)
+                       └── quarantine.py (tier, reasons)
+```
+
+### AuditEvent (JSONL Logging)
+
+```python
+@dataclass
+class AuditEvent:
+    event_id: str         # UUID
+    timestamp: datetime
+    stage: Literal["ingested", "pre_gate", "quarantined", "reader_start",
+                   "reader_complete", "critic_verdict", "action_executed", "skipped"]
+    message_id: str
+    channel: str
+    quarantine_tier: str | None = None
+    quarantine_reasons: list[str] | None = None
+    link_domains: list[str] | None = None
+    action: str | None = None
+    draft_path: str | None = None
+    error: str | None = None
+```
+
+---
+
+## 26. CHAD'S RECOMMENDED ORDER (2026-01-30)
+
+**Do NOT skip steps. This order prevents thrash.**
+
+### Phase 1: Fixtures (NEXT SESSION)
+
+Minimum to unblock integration:
+- [ ] 3 real LinkedIn message notifications
+- [ ] 1 LinkedIn connection invite
+- [ ] 1 LinkedIn digest/weekly email
+- [ ] 2 spoofs:
+  - link text says linkedin.com but href is evil.com
+  - From is @linkedin.com but Reply-To is different
+
+Use: `arkai-gmail export -m <message_id> -o fixtures/linkedin_real/msg1.json`
+
+### Phase 2: Thin Vertical Slice CLI
+
+**NOT full interactive UI.** Just:
+1. Reads fixtures from folder
+2. Runs: `EmailRecord` → `create_evidence_bundle()` → print summary
+3. Prints: PASS/REVIEW/QUARANTINE, reasons, domains, first_200/last_200
+4. Logs audit event
+5. No "open link" yet
+
+### Phase 3: Gmail Live Ingestion
+
+Only after fixtures pipeline is stable:
+- Query "LinkedIn notifications in last N days"
+- Export to fixtures-like JSON
+- Run pipeline
+
+### Phase 4: Interactive CLI
+
+Add commands: copy, open (with 2-step confirm), skip
+
+---
+
+## 27. REMAINING TASKS (UPDATED)
+
+| # | Task | Status | Blocked By |
+|---|------|--------|------------|
+| 1 | Export 5+2 LinkedIn fixtures | **NEXT** | - |
+| 2 | Thin vertical slice CLI | Pending | #1 |
+| 3 | Gmail live ingestion | Pending | #2 |
+| 4 | Interactive CLI commands | Pending | #3 |
+| 5 | Obsidian digest generator | Pending | #2 |
+
+**Completed this session:**
+- [x] arkai-gmail export command (c783bea)
+- [x] services/inbox/ scaffold (2e9bbb2)
+- [x] normalize.py + tests (39 tests)
+- [x] quarantine.py + tests (34 tests)
+- [x] url_extractor.py + tests (44 tests)
+- [x] critic_evidence_bundle.schema.json
+- [x] models.py integration contracts (8d396f0)
+- [x] audit.py MVP JSONL logging (8d396f0)
