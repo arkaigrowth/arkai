@@ -596,13 +596,13 @@ Add commands: copy, open (with 2-step confirm), skip
 
 | # | Task | Status | Blocked By |
 |---|------|--------|------------|
-| 1 | Export 5+2 LinkedIn fixtures | **NEXT** | - |
-| 2 | Thin vertical slice CLI | Pending | #1 |
-| 3 | Gmail live ingestion | Pending | #2 |
+| 1 | Export 5 real LinkedIn fixtures | **NEXT** | USER ACTION |
+| 2 | Thin vertical slice CLI | ✅ DONE | - |
+| 3 | Gmail live ingestion | Pending | #1 |
 | 4 | Interactive CLI commands | Pending | #3 |
 | 5 | Obsidian digest generator | Pending | #2 |
 
-**Completed this session:**
+**Completed previous session:**
 - [x] arkai-gmail export command (c783bea)
 - [x] services/inbox/ scaffold (2e9bbb2)
 - [x] normalize.py + tests (39 tests)
@@ -611,3 +611,55 @@ Add commands: copy, open (with 2-step confirm), skip
 - [x] critic_evidence_bundle.schema.json
 - [x] models.py integration contracts (8d396f0)
 - [x] audit.py MVP JSONL logging (8d396f0)
+
+---
+
+## 28. SESSION 2 COMPLETED (2026-01-30)
+
+**Commit:** `be4db6d` - feat(inbox): add Gmail ingestion + thin CLI pipeline slice
+
+### Files Added (2,074 lines)
+
+| File | Purpose |
+|------|---------|
+| `ingestion/__init__.py` | Package exports |
+| `ingestion/gmail.py` | Gmail API JSON → EmailRecord parser |
+| `cli/triage.py` | Thin CLI with `pipeline` command |
+| `tests/test_ingestion.py` | 46 ingestion tests |
+| `tests/fixtures/linkedin_spoof/*.json` | 2 synthetic spoofs |
+| `tests/fixtures/README.md` | Fixture documentation |
+
+### Test Coverage
+
+- **163 total tests** (39 normalize + 34 quarantine + 44 url_extractor + 46 ingestion)
+- All tests pass in 0.09s
+
+### Spoof Detection Verified
+
+```
+spoof_link_mismatch.json → QUARANTINE
+  Reasons: deep_link_wrong_domain, link_text_href_mismatch
+
+spoof_reply_to.json → QUARANTINE
+  Reasons: reply_to_mismatch
+```
+
+### Usage
+
+```bash
+cd ~/AI/arkai/services/inbox
+uv run arkai-inbox pipeline --fixtures-dir tests/fixtures/linkedin_spoof/
+```
+
+### Next Session Instructions
+
+1. **USER ACTION REQUIRED:** Export 5 real LinkedIn emails
+   ```bash
+   # Find message IDs in Gmail URL (after #inbox/)
+   arkai-gmail export -m MSG_ID -o services/inbox/tests/fixtures/linkedin_real/notification1.json
+   # Repeat for: notification2.json, notification3.json, invite1.json, digest1.json
+   ```
+
+2. Run pipeline on real fixtures to validate detection rules
+
+3. After fixtures pass, implement Gmail live ingestion (Phase 3)
