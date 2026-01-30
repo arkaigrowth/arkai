@@ -28,11 +28,22 @@ LINKEDIN_VALID_SENDERS = [
     "messages-noreply@linkedin.com",
     "invitations@linkedin.com",
     "jobs-noreply@linkedin.com",
+    "jobalerts-noreply@linkedin.com",  # Job alert emails
 ]
 
 # LinkedIn approved link domains
 LINKEDIN_APPROVED_DOMAINS = {"linkedin.com", "www.linkedin.com"}
 LINKEDIN_SUSPICIOUS_DOMAINS = {"lnkd.in"}  # Shortener - allowed with warning
+
+# Expected third-party domains in LinkedIn email footers (app stores, etc.)
+EXPECTED_THIRD_PARTY_DOMAINS = {
+    "play.google.com",      # Google Play Store
+    "itunes.apple.com",     # iOS App Store (legacy)
+    "apps.apple.com",       # iOS App Store (new)
+    "apps.microsoft.com",   # Microsoft Store
+    "support.apple.com",    # Apple support links
+    "support.google.com",   # Google support links
+}
 
 
 def extract_email_address(from_header: str) -> str:
@@ -106,13 +117,17 @@ def is_approved_linkedin_domain(url: str) -> tuple[bool, list[str]]:
         if ':' in domain:
             domain = domain.split(':')[0]
 
-        # Check approved domains
+        # Check approved LinkedIn domains
         if domain in LINKEDIN_APPROVED_DOMAINS:
             return (True, warnings)
 
-        # Check suspicious but allowed domains
+        # Check suspicious but allowed domains (shorteners)
         if domain in LINKEDIN_SUSPICIOUS_DOMAINS:
             warnings.append(f"shortener_domain_{domain}")
+            return (True, warnings)
+
+        # Check expected third-party domains (app stores, etc.)
+        if domain in EXPECTED_THIRD_PARTY_DOMAINS:
             return (True, warnings)
 
         # Not approved
