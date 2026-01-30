@@ -283,14 +283,24 @@ def normalize_for_risk_detection(raw_content: str) -> str:
 
 ## 15. NEXT SESSION CHECKLIST
 
-1. [ ] Create services/inbox/ directory structure
-2. [ ] Create pyproject.toml with dependencies
-3. [ ] Implement normalize.py + tests
-4. [ ] Implement quarantine.py + tests
-5. [ ] Implement url_extractor.py (BeautifulSoup) + tests
-6. [ ] Create critic_evidence_bundle.schema.json
-7. [ ] Obtain real Gmail API fixture exports (from you)
-8. [ ] Implement CLI triage loop
+1. [ ] **Add `arkai-gmail export` command** (5 min) - exports message as raw JSON for fixtures
+2. [ ] Create services/inbox/ directory structure
+3. [ ] Create pyproject.toml with dependencies
+4. [ ] Implement normalize.py + tests
+5. [ ] Implement quarantine.py + tests
+6. [ ] Implement url_extractor.py (BeautifulSoup) + tests
+7. [ ] Create critic_evidence_bundle.schema.json
+8. [ ] Export 10 real LinkedIn notifications + 5 spoofs as fixtures
+9. [ ] Implement CLI triage loop
+
+---
+
+## 15b. STYLE CONSTRAINTS (REPLY DRAFTS)
+
+When generating reply drafts:
+- ❌ No em dashes (—)
+- ✅ Use regular dashes (-) or commas instead
+- More constraints TBD (user will provide example replies later)
 
 ---
 
@@ -325,8 +335,8 @@ Single config file. No sprawl. Tilde allowed (expanded at runtime).
 
 obsidian:
   enabled: true
-  vault_path: ~/Obsidian/MainVault    # ~ allowed, expanded at runtime
-  inbox_root: 00-Inbox/Digest          # Relative to vault
+  vault_path: ~/Obsidian/vault-sandbox  # Test vault
+  inbox_root: 00-Inbox/Digest            # Relative to vault
 
 linkedin:
   exact_pass:
