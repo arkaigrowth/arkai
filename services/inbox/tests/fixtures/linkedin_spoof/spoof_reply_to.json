@@ -1,0 +1,69 @@
+{
+  "id": "18d5b3c4d5e6f7a8",
+  "threadId": "18d5b3c4d5e6f7a8",
+  "labelIds": ["INBOX", "UNREAD", "CATEGORY_UPDATES"],
+  "snippet": "Hi Alex, Someone sent you a message on LinkedIn. Click here to view: View Message Thanks, The LinkedIn Team",
+  "historyId": "12345679",
+  "internalDate": "1706544000000",
+  "sizeEstimate": 4128,
+  "payload": {
+    "partId": "",
+    "mimeType": "multipart/alternative",
+    "filename": "",
+    "headers": [
+      {"name": "Delivered-To", "value": "alex@example.com"},
+      {"name": "Received", "value": "by 2002:a05:6214:20a3:0:0:0:0 with SMTP id 3csp123457wrz; Mon, 29 Jan 2024 11:00:00 -0800 (PST)"},
+      {"name": "X-Google-DKIM-Signature", "value": "v=1; a=rsa-sha256; c=relaxed/relaxed; d=1e100.net; s=20230601; t=1706544000"},
+      {"name": "X-Received", "value": "by 2002:a05:6214:20a3:b0:6c3:1234:5679 with SMTP id abc124; Mon, 29 Jan 2024 11:00:00 -0800 (PST)"},
+      {"name": "ARC-Seal", "value": "i=1; a=rsa-sha256; t=1706544000; cv=none"},
+      {"name": "ARC-Message-Signature", "value": "i=1; a=rsa-sha256; c=relaxed/relaxed; d=google.com; s=arc-20160816"},
+      {"name": "ARC-Authentication-Results", "value": "i=1; mx.google.com; dkim=pass header.i=@linkedin.com header.s=proddkim1024"},
+      {"name": "Return-Path", "value": "<bounce-9876543210@bounce.linkedin.com>"},
+      {"name": "Received-SPF", "value": "pass (google.com: domain of bounce-9876543210@bounce.linkedin.com designates 108.174.0.0 as permitted sender)"},
+      {"name": "Authentication-Results", "value": "mx.google.com; dkim=pass header.i=@linkedin.com header.s=proddkim1024; spf=pass (google.com: domain of bounce-9876543210@bounce.linkedin.com designates 108.174.0.0 as permitted sender)"},
+      {"name": "DKIM-Signature", "value": "v=1; a=rsa-sha256; c=relaxed/relaxed; d=linkedin.com; s=proddkim1024; t=1706544000"},
+      {"name": "Date", "value": "Mon, 29 Jan 2024 19:00:00 +0000"},
+      {"name": "From", "value": "LinkedIn <messages-noreply@linkedin.com>"},
+      {"name": "Reply-To", "value": "phisher@evil.com"},
+      {"name": "To", "value": "alex@example.com"},
+      {"name": "Message-ID", "value": "<9876543210.1706544000@linkedin.com>"},
+      {"name": "Subject", "value": "Someone sent you a message"},
+      {"name": "MIME-Version", "value": "1.0"},
+      {"name": "Content-Type", "value": "multipart/alternative; boundary=\"----=_Part_67890_9876543210.1706544000000\""},
+      {"name": "X-LinkedIn-Class", "value": "INMAIL-NOTIFICATION"},
+      {"name": "X-LinkedIn-Template", "value": "inmail_received_email"},
+      {"name": "List-Unsubscribe", "value": "<https://www.linkedin.com/e/v2?e=def456&t=lun&midToken=AQG>"}
+    ],
+    "body": {
+      "size": 0
+    },
+    "parts": [
+      {
+        "partId": "0",
+        "mimeType": "text/plain",
+        "filename": "",
+        "headers": [
+          {"name": "Content-Type", "value": "text/plain; charset=\"UTF-8\""},
+          {"name": "Content-Transfer-Encoding", "value": "quoted-printable"}
+        ],
+        "body": {
+          "size": 150,
+          "data": "SGkgQWxleCwKClNvbWVvbmUgc2VudCB5b3UgYSBtZXNzYWdlIG9uIExpbmtlZEluLgoKQ2xpY2sgaGVyZSB0byB2aWV3OiBodHRwczovL3d3dy5saW5rZWRpbi5jb20vbWVzc2FnaW5nL3RocmVhZC8xMjM0NTYKK1RoYW5rcywKVGhlIExpbmtlZEluIFRlYW0="
+        }
+      },
+      {
+        "partId": "1",
+        "mimeType": "text/html",
+        "filename": "",
+        "headers": [
+          {"name": "Content-Type", "value": "text/html; charset=\"UTF-8\""},
+          {"name": "Content-Transfer-Encoding", "value": "base64"}
+        ],
+        "body": {
+          "size": 380,
+          "data": "PFwhRE9DVFlQRSBodG1sPjxodG1sPjxoZWFkPjwvaGVhZD48Ym9keT48cD5IaSBBbGV4LDwvcD48cD5Tb21lb25lIHNlbnQgeW91IGEgbWVzc2FnZSBvbiBMaW5rZWRJbi48L3A+PHA+Q2xpY2sgaGVyZSB0byB2aWV3OiA8YSBocmVmPSJodHRwczovL3d3dy5saW5rZWRpbi5jb20vbWVzc2FnaW5nL3RocmVhZC8xMjM0NTYiPlZpZXcgTWVzc2FnZTwvYT48L3A+PHA+VGhhbmtzLDxicj5UaGUgTGlua2VkSW4gVGVhbTwvcD48L2JvZHk+PC9odG1sPg=="
+        }
+      }
+    ]
+  }
+}
