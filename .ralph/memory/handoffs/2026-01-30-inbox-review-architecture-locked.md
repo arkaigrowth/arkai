@@ -600,7 +600,8 @@ Add commands: copy, open (with 2-step confirm), skip
 | 2 | Thin vertical slice CLI | ✅ DONE | - |
 | 3 | Gmail live ingestion | ✅ DONE | - |
 | 4 | Interactive CLI commands | ✅ DONE | - |
-| 5 | Obsidian digest generator | **NEXT** | - |
+| 5 | Obsidian digest generator | ✅ DONE | - |
+| 6 | Config file (~/.arkai/config.yaml) | ✅ DONE | - |
 
 **Completed previous session:**
 - [x] arkai-gmail export command (c783bea)
