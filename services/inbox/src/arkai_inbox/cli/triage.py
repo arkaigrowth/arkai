@@ -20,6 +20,7 @@ from rich.prompt import Prompt
 from rich.table import Table
 
 from arkai_inbox.audit import AuditLog, log_pre_gate, log_action
+from arkai_inbox.cli.obsidian import digest as digest_command
 from arkai_inbox.ingestion.gmail import parse_gmail_message
 from arkai_inbox.ingestion.gmail_client import GmailClient
 from arkai_inbox.models import create_evidence_bundle, CriticEvidenceBundle, EmailRecord
@@ -466,6 +467,32 @@ def triage(
 
     console.print(f"\n[dim]Audit log: {audit.run_dir}[/dim]")
     console.print(f"[bold]Triage complete. Processed {processed} messages.[/bold]")
+
+
+@app.command()
+def digest(
+    run_dir: Path = typer.Option(None, "--run", "-r", help="Specific run directory"),
+    vault: Path = typer.Option(..., "--vault", "-v", help="Obsidian vault path"),
+    inbox_root: str = typer.Option("00-Inbox/Digest", "--inbox-root", "-i", help="Relative path in vault"),
+) -> None:
+    """Generate Obsidian markdown digest from audit log."""
+    from arkai_inbox.cli.obsidian import generate_digest
+
+    runs_dir = Path.home() / ".arkai" / "runs"
+
+    if run_dir:
+        audit = AuditLog.from_existing(run_dir)
+    else:
+        inbox_runs = sorted(runs_dir.glob("inbox-*"), reverse=True)
+        if not inbox_runs:
+            console.print("[red]No inbox runs found.[/red]")
+            raise typer.Exit(1)
+        audit = AuditLog.from_existing(inbox_runs[0])
+        console.print(f"[dim]Using: {inbox_runs[0].name}[/dim]")
+
+    vault_path = vault.expanduser().resolve()
+    output = generate_digest(audit, vault_path, inbox_root)
+    console.print(f"[green]✓ Generated:[/green] {output}")
 
 
 @app.command()
