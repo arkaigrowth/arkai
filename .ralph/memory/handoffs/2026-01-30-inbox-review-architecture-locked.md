@@ -596,11 +596,11 @@ Add commands: copy, open (with 2-step confirm), skip
 
 | # | Task | Status | Blocked By |
 |---|------|--------|------------|
-| 1 | Export 5 real LinkedIn fixtures | **NEXT** | USER ACTION |
+| 1 | Export 5 real LinkedIn fixtures | ✅ DONE | - |
 | 2 | Thin vertical slice CLI | ✅ DONE | - |
-| 3 | Gmail live ingestion | Pending | #1 |
-| 4 | Interactive CLI commands | Pending | #3 |
-| 5 | Obsidian digest generator | Pending | #2 |
+| 3 | Gmail live ingestion | ✅ DONE | - |
+| 4 | Interactive CLI commands | **NEXT** | - |
+| 5 | Obsidian digest generator | Pending | #4 |
 
 **Completed previous session:**
 - [x] arkai-gmail export command (c783bea)
@@ -663,3 +663,54 @@ uv run arkai-inbox pipeline --fixtures-dir tests/fixtures/linkedin_spoof/
 2. Run pipeline on real fixtures to validate detection rules
 
 3. After fixtures pass, implement Gmail live ingestion (Phase 3)
+
+---
+
+## 29. SESSION 3 COMPLETED (2026-01-30)
+
+**Commits:**
+- `6072c36` - feat(inbox): add 5 real LinkedIn fixtures + fix quarantine rules
+- `1f304ae` - feat(inbox): add Gmail live ingestion command
+
+### Fixes Applied
+
+1. **Sender allowlist expanded:**
+   - Added `jobalerts-noreply@linkedin.com` to valid senders
+
+2. **Expected third-party domains added:**
+   - `play.google.com` (Google Play Store)
+   - `itunes.apple.com` / `apps.apple.com` (iOS App Store)
+   - `apps.microsoft.com` (Microsoft Store)
+   - These are "Download the app" links in LinkedIn email footers
+
+### New Files
+
+| File | Purpose |
+|------|---------|
+| `ingestion/gmail_client.py` | Gmail API client, reuses arkai-gmail tokens |
+| `fixtures/linkedin_real/*.json` | 5 real LinkedIn job alert emails |
+
+### Commands Available
+
+```bash
+# Fixture-based testing
+arkai-inbox pipeline --fixtures-dir tests/fixtures/linkedin_spoof/
+
+# Live Gmail ingestion
+arkai-inbox gmail -q "from:linkedin.com" -n 10
+arkai-inbox gmail -q "from:linkedin.com newer_than:7d" -n 20
+```
+
+### Results
+
+- **Real LinkedIn emails:** 5/5 PASS
+- **Spoof emails:** 2/2 QUARANTINE
+- **Gmail live:** Working end-to-end
+
+### Next: Phase 4 - Interactive CLI Commands
+
+Add commands during triage:
+- `c` / `copy` - Copy to clipboard
+- `o` / `open` - Open link (with 2-step confirmation)
+- `s` / `skip` - Skip message
+- `q` / `quit` - Exit triage
