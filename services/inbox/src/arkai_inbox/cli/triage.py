@@ -3,19 +3,23 @@
 Main commands:
 - pipeline: Run fixture-based pipeline testing
 - gmail: Run pipeline on live Gmail messages
-- (future) triage: Interactive email triage loop
+- triage: Interactive email triage loop
 """
 
 import json
+import subprocess
+import sys
+import webbrowser
 from pathlib import Path
 from typing import Optional
 
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from rich.prompt import Prompt
 from rich.table import Table
 
-from arkai_inbox.audit import AuditLog, log_pre_gate
+from arkai_inbox.audit import AuditLog, log_pre_gate, log_action
 from arkai_inbox.ingestion.gmail import parse_gmail_message
 from arkai_inbox.ingestion.gmail_client import GmailClient
 from arkai_inbox.models import create_evidence_bundle, CriticEvidenceBundle, EmailRecord
@@ -324,6 +328,144 @@ def gmail(
 
     # Print audit info
     console.print(f"\n[dim]Audit log: {audit.run_dir}[/dim]")
+
+
+def _copy_to_clipboard(text: str) -> bool:
+    """Copy text to clipboard (macOS)."""
+    try:
+        process = subprocess.Popen(
+            ["pbcopy"],
+            stdin=subprocess.PIPE,
+        )
+        process.communicate(text.encode("utf-8"))
+        return process.returncode == 0
+    except Exception:
+        return False
+
+
+def _open_url_with_confirmation(url: str, console: Console) -> bool:
+    """Open URL with 2-step confirmation per security policy."""
+    console.print(f"\n[yellow]⚠️ UNTRUSTED LINK:[/yellow] {url}")
+    console.print("[dim]Type OPEN to open in browser, or press Enter to cancel:[/dim]")
+
+    response = Prompt.ask(">", default="")
+    if response.strip().upper() == "OPEN":
+        webbrowser.open(url)
+        return True
+    return False
+
+
+@app.command()
+def triage(
+    query: str = typer.Option(
+        "from:linkedin.com",
+        "--query", "-q",
+        help="Gmail search query",
+    ),
+    max_results: int = typer.Option(
+        10,
+        "--max", "-n",
+        help="Maximum messages to fetch",
+    ),
+) -> None:
+    """Interactive email triage with copy/open/skip commands.
+
+    Commands during triage:
+      c, copy   - Copy sender + subject to clipboard
+      o, open   - Open first link (with confirmation)
+      s, skip   - Skip to next message
+      q, quit   - Exit triage
+
+    Example:
+        arkai-inbox triage -q "from:linkedin.com" -n 5
+    """
+    client = GmailClient()
+
+    if not client.is_authenticated():
+        console.print("[red]Not authenticated. Run 'arkai-gmail auth' first.[/red]")
+        raise typer.Exit(1)
+
+    email = client.get_user_email()
+    console.print(f"[dim]Authenticated as: {email}[/dim]")
+    console.print(f"[bold]Query: {query}[/bold]\n")
+
+    message_refs = client.search_messages(query, max_results)
+    if not message_refs:
+        console.print("[yellow]No messages found.[/yellow]")
+        raise typer.Exit(0)
+
+    audit = AuditLog.create_run()
+    console.print(f"[dim]Found {len(message_refs)} messages. Starting triage...[/dim]\n")
+    console.print("[dim]Commands: (c)opy, (o)pen, (s)kip, (q)uit[/dim]\n")
+
+    processed = 0
+    for i, ref in enumerate(message_refs, 1):
+        try:
+            raw = client.get_message(ref["id"])
+            record = parse_gmail_message(raw)
+            bundle = create_evidence_bundle(record)
+
+            # Log pre-gate
+            log_pre_gate(
+                audit,
+                message_id=record.message_id,
+                quarantine_tier=bundle.quarantine_tier,
+                quarantine_reasons=bundle.quarantine_reasons,
+                link_domains=bundle.link_domains,
+                channel=record.channel,
+            )
+
+            # Display
+            panel = _format_evidence_panel(f"[{i}/{len(message_refs)}]", bundle)
+            console.print(panel)
+
+            # Interactive loop
+            while True:
+                cmd = Prompt.ask(
+                    f"[bold][{i}/{len(message_refs)}][/bold]",
+                    choices=["c", "copy", "o", "open", "s", "skip", "q", "quit"],
+                    default="s",
+                )
+
+                if cmd in ("c", "copy"):
+                    text = f"{bundle.sender}\n{bundle.subject or '(no subject)'}"
+                    if _copy_to_clipboard(text):
+                        console.print("[green]✓ Copied to clipboard[/green]")
+                        log_action(audit, record.message_id, "copy", channel=record.channel)
+                    else:
+                        console.print("[red]Failed to copy[/red]")
+
+                elif cmd in ("o", "open"):
+                    if bundle.link_domains:
+                        # Get first linkedin.com link
+                        url = f"https://www.linkedin.com"  # Default
+                        for domain in bundle.link_domains:
+                            if "linkedin.com" in domain:
+                                url = f"https://{domain}"
+                                break
+                        if _open_url_with_confirmation(url, console):
+                            log_action(audit, record.message_id, f"open:{url}", channel=record.channel)
+                    else:
+                        console.print("[yellow]No links found[/yellow]")
+
+                elif cmd in ("s", "skip"):
+                    console.print("[dim]Skipped[/dim]\n")
+                    break
+
+                elif cmd in ("q", "quit"):
+                    console.print(f"\n[dim]Audit log: {audit.run_dir}[/dim]")
+                    console.print(f"[bold]Processed {processed} messages.[/bold]")
+                    raise typer.Exit(0)
+
+            processed += 1
+
+        except typer.Exit:
+            raise
+        except Exception as e:
+            console.print(f"[red]Error: {e}[/red]")
+
+    console.print(f"\n[dim]Audit log: {audit.run_dir}[/dim]")
+    console.print(f"[bold]Triage complete. Processed {processed} messages.[/bold]")
 
 
 @app.command()
