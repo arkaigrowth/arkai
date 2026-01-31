@@ -599,8 +599,8 @@ Add commands: copy, open (with 2-step confirm), skip
 | 1 | Export 5 real LinkedIn fixtures | ✅ DONE | - |
 | 2 | Thin vertical slice CLI | ✅ DONE | - |
 | 3 | Gmail live ingestion | ✅ DONE | - |
-| 4 | Interactive CLI commands | **NEXT** | - |
-| 5 | Obsidian digest generator | Pending | #4 |
+| 4 | Interactive CLI commands | ✅ DONE | - |
+| 5 | Obsidian digest generator | **NEXT** | - |
 
 **Completed previous session:**
 - [x] arkai-gmail export command (c783bea)
@@ -707,10 +707,19 @@ arkai-inbox gmail -q "from:linkedin.com newer_than:7d" -n 20
 - **Spoof emails:** 2/2 QUARANTINE
 - **Gmail live:** Working end-to-end
 
-### Next: Phase 4 - Interactive CLI Commands
+### Phase 4 Complete: Interactive CLI
 
-Add commands during triage:
-- `c` / `copy` - Copy to clipboard
-- `o` / `open` - Open link (with 2-step confirmation)
-- `s` / `skip` - Skip message
-- `q` / `quit` - Exit triage
+**Commit:** `9e90b92`
+
+```bash
+arkai-inbox triage -q "from:linkedin.com" -n 5
+```
+
+Commands: `c`opy, `o`pen, `s`kip, `q`uit
+
+### Next: Phase 5 - Obsidian Digest Generator
+
+Generate markdown digest from audit JSONL:
+```
+~/.arkai/runs/inbox-*/events.jsonl → ~/Obsidian/vault/00-Inbox/Digest/2026-01-30.md
+```
