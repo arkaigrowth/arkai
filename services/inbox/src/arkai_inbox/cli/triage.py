@@ -2,6 +2,7 @@
 
 Main commands:
 - pipeline: Run fixture-based pipeline testing
+- gmail: Run pipeline on live Gmail messages
 - (future) triage: Interactive email triage loop
 """
 
@@ -16,7 +17,8 @@ from rich.table import Table
 
 from arkai_inbox.audit import AuditLog, log_pre_gate
 from arkai_inbox.ingestion.gmail import parse_gmail_message
-from arkai_inbox.models import create_evidence_bundle, CriticEvidenceBundle
+from arkai_inbox.ingestion.gmail_client import GmailClient
+from arkai_inbox.models import create_evidence_bundle, CriticEvidenceBundle, EmailRecord
 
 app = typer.Typer(
     name="arkai-inbox",
@@ -189,6 +191,139 @@ def pipeline(
     console.print(f"\n[dim]Audit log: {audit.run_dir}[/dim]")
     if verbose:
         console.print(f"[dim]Events logged: {summary['total_events']}[/dim]")
+
+
+@app.command()
+def gmail(
+    query: str = typer.Option(
+        "from:linkedin.com",
+        "--query",
+        "-q",
+        help="Gmail search query",
+    ),
+    max_results: int = typer.Option(
+        10,
+        "--max",
+        "-n",
+        help="Maximum messages to fetch",
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Show detailed output",
+    ),
+) -> None:
+    """Run the inbox pipeline on live Gmail messages.
+
+    Searches Gmail using the provided query and runs Pre-Gate analysis
+    on each message. Requires prior authentication via 'arkai-gmail auth'.
+
+    Examples:
+        arkai-inbox gmail -q "from:linkedin.com" -n 5
+        arkai-inbox gmail -q "from:notifications-noreply@linkedin.com"
+        arkai-inbox gmail -q "from:linkedin.com newer_than:7d"
+    """
+    # Initialize Gmail client
+    client = GmailClient()
+
+    if not client.is_authenticated():
+        console.print("[red]Not authenticated with Gmail.[/red]")
+        console.print("Run 'arkai-gmail auth' first to authenticate.")
+        raise typer.Exit(1)
+
+    # Show who we're authenticated as
+    try:
+        email = client.get_user_email()
+        console.print(f"[dim]Authenticated as: {email}[/dim]")
+    except Exception as e:
+        console.print(f"[red]Auth error: {e}[/red]")
+        raise typer.Exit(1)
+
+    # Search for messages
+    console.print(f"[bold]Searching: {query}[/bold]")
+    console.print(f"[dim]Max results: {max_results}[/dim]\n")
+
+    try:
+        message_refs = client.search_messages(query, max_results)
+    except Exception as e:
+        console.print(f"[red]Search failed: {e}[/red]")
+        raise typer.Exit(1)
+
+    if not message_refs:
+        console.print("[yellow]No messages found matching query.[/yellow]")
+        raise typer.Exit(0)
+
+    console.print(f"[bold]Processing {len(message_refs)} messages...[/bold]\n")
+
+    # Create audit run
+    audit = AuditLog.create_run()
+
+    # Track results
+    results: dict[str, list[str]] = {
+        "PASS": [],
+        "REVIEW": [],
+        "QUARANTINE": [],
+    }
+    errors: list[tuple[str, str]] = []
+
+    # Process each message
+    for i, ref in enumerate(message_refs, 1):
+        message_id = ref["id"]
+
+        try:
+            # Fetch full message
+            raw_message = client.get_message(message_id)
+
+            # Parse into EmailRecord
+            email_record: EmailRecord = parse_gmail_message(raw_message)
+
+            # Create evidence bundle (runs Pre-Gate)
+            bundle = create_evidence_bundle(email_record)
+
+            # Log to audit
+            log_pre_gate(
+                audit,
+                message_id=email_record.message_id,
+                quarantine_tier=bundle.quarantine_tier,
+                quarantine_reasons=bundle.quarantine_reasons,
+                link_domains=bundle.link_domains,
+                channel=email_record.channel,
+            )
+
+            # Track result
+            results[bundle.quarantine_tier].append(message_id)
+
+            # Display panel
+            panel = _format_evidence_panel(f"[{i}/{len(message_refs)}] {message_id}", bundle)
+            console.print(panel)
+            console.print()
+
+        except Exception as e:
+            errors.append((message_id, str(e)))
+            console.print(f"[red]Error processing {message_id}: {e}[/red]")
+            if verbose:
+                import traceback
+                console.print(f"[dim]{traceback.format_exc()}[/dim]")
+
+    # Print summary
+    console.print()
+    summary_content = [
+        f"Processed: {len(message_refs)} messages",
+        f"[green]PASS: {len(results['PASS'])}[/green]  "
+        f"[yellow]REVIEW: {len(results['REVIEW'])}[/yellow]  "
+        f"[red]QUARANTINE: {len(results['QUARANTINE'])}[/red]",
+    ]
+    if errors:
+        summary_content.append(f"[red]Errors: {len(errors)}[/red]")
+
+    console.print(Panel(
+        "\n".join(summary_content),
+        title="[bold]Gmail Pipeline Summary[/bold]",
+    ))
+
+    # Print audit info
+    console.print(f"\n[dim]Audit log: {audit.run_dir}[/dim]")
 
 
 @app.command()
