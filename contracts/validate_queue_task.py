@@ -25,6 +25,7 @@ Exit codes:
     2 — Usage error
 """
 
+import hashlib
 import json
 import re
 import sys
@@ -34,6 +35,8 @@ from pathlib import Path
 # ── Request schema constants ──────────────────────────────────────────
 
 TASK_ID_PATTERN = re.compile(r"^[a-f0-9]{12}$")
+INTEGRITY_HASH_PATTERN = re.compile(r"^[a-f0-9]{64}$")
+VALID_SCHEMA_VERSIONS = {"1.0.0", "1.1.0"}
 
 VALID_SERVICES = {"notes", "reminders", "imessage"}
 VALID_OPERATIONS = {"list", "read", "create", "search", "send", "delete"}
@@ -48,7 +51,8 @@ VALID_SERVICE_OPERATIONS = {
 REQUIRED_REQUEST_FIELDS = {"schema_version", "task_id", "created_at", "action"}
 ALLOWED_REQUEST_FIELDS = {
     "schema_version", "task_id", "created_at", "action",
-    "priority", "idempotency_key", "max_attempts", "visibility_timeout_sec",
+    "priority", "idempotency_key", "integrity_hash",
+    "max_attempts", "visibility_timeout_sec",
 }
 
 REQUIRED_ACTION_FIELDS = {"service", "operation"}
@@ -111,8 +115,8 @@ def validate_request(data: dict, filepath: str) -> list[str]:
         return errors
 
     # schema_version
-    if data["schema_version"] != "1.0.0":
-        errors.append(f"schema_version must be '1.0.0', got '{data['schema_version']}'")
+    if data["schema_version"] not in VALID_SCHEMA_VERSIONS:
+        errors.append(f"schema_version must be one of {sorted(VALID_SCHEMA_VERSIONS)}, got '{data['schema_version']}'")
 
     # task_id
     if not TASK_ID_PATTERN.match(str(data["task_id"])):
@@ -123,6 +127,20 @@ def validate_request(data: dict, filepath: str) -> list[str]:
         datetime.fromisoformat(data["created_at"])
     except (ValueError, TypeError):
         errors.append(f"created_at must be RFC3339, got '{data['created_at']}'")
+
+    # integrity_hash (optional, v1.1.0) — integrity check, not authentication
+    ih = data.get("integrity_hash")
+    if ih is not None:
+        if not isinstance(ih, str) or not INTEGRITY_HASH_PATTERN.match(ih):
+            errors.append(f"integrity_hash must be 64-char lowercase hex, got '{ih}'")
+        elif "action" in data and isinstance(data["action"], dict):
+            canonical = json.dumps(data["action"], sort_keys=True, separators=(",", ":"))
+            expected = hashlib.sha256(canonical.encode()).hexdigest()
+            if ih != expected:
+                errors.append(
+                    f"integrity_hash mismatch: got '{ih[:16]}...', "
+                    f"expected '{expected[:16]}...' from canonical action"
+                )
 
     # action
     action = data["action"]
@@ -209,8 +227,8 @@ def validate_state(data: dict, filepath: str) -> list[str]:
         return errors
 
     # schema_version
-    if data["schema_version"] != "1.0.0":
-        errors.append(f"schema_version must be '1.0.0', got '{data['schema_version']}'")
+    if data["schema_version"] not in VALID_SCHEMA_VERSIONS:
+        errors.append(f"schema_version must be one of {sorted(VALID_SCHEMA_VERSIONS)}, got '{data['schema_version']}'")
 
     # task_id
     if not TASK_ID_PATTERN.match(str(data["task_id"])):
@@ -432,7 +450,7 @@ def main():
         print("  python3 contracts/validate_queue_task.py --check-lease contracts/fixtures/queue_task_state_expired_lease.json")
         sys.exit(2)
 
-    print(f"Validating {len(files)} file(s) against queue_task_contract v1.0.0")
+    print(f"Validating {len(files)} file(s) against queue_task_contract v1.1.0")
     if force_type:
         print(f"Forced type: {force_type}")
     if check_lease:

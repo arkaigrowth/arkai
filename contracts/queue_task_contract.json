@@ -3,7 +3,7 @@
   "$id": "https://arkai.dev/schemas/queue_task_contract.json",
   "title": "Queue Task Contract",
   "description": "Contract for Apple CLI bridge task handoff. Producer (OpenClaw agent) writes request files, consumer (host worker) writes state files. Two-directory model respects Docker mount boundaries: output/queue/ for requests, input/queue/ for state+results.",
-  "version": "1.0.0",
+  "version": "1.1.0",
 
   "contract": {
     "architecture": {
@@ -96,7 +96,8 @@
     "properties": {
       "schema_version": {
         "type": "string",
-        "const": "1.0.0"
+        "enum": ["1.0.0", "1.1.0"],
+        "description": "1.0.0 = base contract, 1.1.0 = adds optional integrity_hash"
       },
       "task_id": {
         "type": "string",
@@ -120,6 +121,11 @@
       "idempotency_key": {
         "type": ["string", "null"],
         "description": "Optional. If set, task_id = SHA256(idempotency_key)[:12]. Used for dedup on create operations."
+      },
+      "integrity_hash": {
+        "type": ["string", "null"],
+        "pattern": "^[a-f0-9]{64}$",
+        "description": "Optional (v1.1.0). SHA256 hex digest of canonical action JSON: json.dumps(action, sort_keys=True, separators=(',',':')). Integrity check, not authentication — no shared secret. Worker SHOULD verify if present, MUST NOT require."
       },
       "max_attempts": {
         "type": "integer",
@@ -146,7 +152,7 @@
     "properties": {
       "schema_version": {
         "type": "string",
-        "const": "1.0.0"
+        "enum": ["1.0.0", "1.1.0"]
       },
       "task_id": {
         "type": "string",

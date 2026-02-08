@@ -8,6 +8,7 @@
     "params": {}
   },
   "priority": "urgent",
+  "integrity_hash": "not-a-hash",
   "max_attempts": 99,
   "visibility_timeout_sec": 10,
   "extra_field": "should not exist"
