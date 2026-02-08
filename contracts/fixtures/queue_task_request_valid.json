@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0.0",
+  "task_id": "d1a7c435529f",
+  "created_at": "2026-02-08T22:00:00+00:00",
+  "action": {
+    "service": "notes",
+    "operation": "read",
+    "params": {
+      "title": "Shopping List"
+    }
+  },
+  "priority": "normal",
+  "idempotency_key": "notes-read-shopping-list",
+  "max_attempts": 3,
+  "visibility_timeout_sec": 300
+}
