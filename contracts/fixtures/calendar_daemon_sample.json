@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.0.0",
+  "processed_at": "2026-02-08T14:30:00+00:00",
+  "event": {
+    "id": "b888dc5501b5",
+    "google_event_id": "abc123def456ghij",
+    "calendar_id": "alex@example.com",
+    "calendar_name": "Work Calendar",
+    "status": "confirmed",
+    "summary": "Team Standup",
+    "description": "Daily sync on project progress",
+    "location": "Conference Room B",
+    "start": "2026-02-08T09:00:00-06:00",
+    "end": "2026-02-08T09:30:00-06:00",
+    "all_day": false,
+    "html_link": "https://www.google.com/calendar/event?eid=test123",
+    "organizer": "alex@example.com",
+    "attendees": [
+      {
+        "email": "alex@example.com",
+        "display_name": "Alex K",
+        "response_status": "accepted",
+        "organizer": false,
+        "self": true
+      },
+      {
+        "email": "teammate@example.com",
+        "display_name": "Teammate",
+        "response_status": "accepted",
+        "organizer": false,
+        "self": false
+      }
+    ],
+    "conference_url": "https://meet.google.com/abc-defg-hij",
+    "recurring": true,
+    "recurring_event_id": "abc123def456ghij_R20260101"
+  }
+}
