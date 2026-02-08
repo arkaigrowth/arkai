@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0.0",
+  "task_id": "265543c3b5bc",
+  "status": "leased",
+  "attempts": 1,
+  "lease_owner": "macbook:12345",
+  "lease_until": "2026-02-07T15:00:00+00:00",
+  "first_seen_at": "2026-02-07T14:50:00+00:00",
+  "last_attempt_at": "2026-02-07T14:50:01+00:00",
+  "completed_at": null,
+  "dead_at": null,
+  "result": null,
+  "error": null
+}

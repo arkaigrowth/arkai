@@ -1,0 +1,14 @@
+{
+  "schema_version": "2.0.0",
+  "task_id": "BADTASKID123",
+  "created_at": "not-a-date",
+  "action": {
+    "service": "contacts",
+    "operation": "hack",
+    "params": {}
+  },
+  "priority": "urgent",
+  "max_attempts": 99,
+  "visibility_timeout_sec": 10,
+  "extra_field": "should not exist"
+}
