@@ -1,0 +1,45 @@
+{
+  "schema_version": "1.0.0",
+  "processed_at": "2026-02-08T21:00:00+00:00",
+  "event": {
+    "id": "4ac68b34ece5",
+    "google_event_id": "abc123def456ghij_20260209T150000Z",
+    "calendar_id": "alex@example.com",
+    "calendar_name": "Work Calendar",
+    "status": "confirmed",
+    "summary": "Weekly Team Standup",
+    "description": "Recurring weekly sync — status updates, blockers, planning.",
+    "location": null,
+    "start": "2026-02-09T09:00:00-06:00",
+    "end": "2026-02-09T09:30:00-06:00",
+    "all_day": false,
+    "html_link": "https://www.google.com/calendar/event?eid=abc123recurring",
+    "organizer": "lead@example.com",
+    "attendees": [
+      {
+        "email": "alex@example.com",
+        "display_name": "Alex K",
+        "response_status": "accepted",
+        "organizer": false,
+        "self": true
+      },
+      {
+        "email": "lead@example.com",
+        "display_name": "Team Lead",
+        "response_status": "accepted",
+        "organizer": true,
+        "self": false
+      },
+      {
+        "email": "dev@example.com",
+        "display_name": null,
+        "response_status": "needsAction",
+        "organizer": false,
+        "self": false
+      }
+    ],
+    "conference_url": "https://meet.google.com/abc-defg-hij",
+    "recurring": true,
+    "recurring_event_id": "abc123def456ghij"
+  }
+}
