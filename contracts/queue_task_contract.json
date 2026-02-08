@@ -1,0 +1,340 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arkai.dev/schemas/queue_task_contract.json",
+  "title": "Queue Task Contract",
+  "description": "Contract for Apple CLI bridge task handoff. Producer (OpenClaw agent) writes request files, consumer (host worker) writes state files. Two-directory model respects Docker mount boundaries: output/queue/ for requests, input/queue/ for state+results.",
+  "version": "1.0.0",
+
+  "contract": {
+    "architecture": {
+      "pattern": "File-based task queue with lease semantics",
+      "producer": "OpenClaw agent (Docker container) — writes request files via safe_fs_write_text",
+      "consumer": "Host-side worker process — reads requests, executes via Apple CLI bridge, writes state files",
+      "transport": "Docker bind-mount shared directories",
+      "note": "No database, no message broker. Simplicity over throughput. Designed for <100 tasks/day."
+    },
+
+    "directories": {
+      "requests": {
+        "path": "workspace/output/queue/",
+        "owner": "agent (write), host (read)",
+        "pattern": "{task_id}.json",
+        "note": "Agent creates request files here. Immutable once written."
+      },
+      "state": {
+        "path": "workspace/input/queue/",
+        "owner": "host (write), agent (read)",
+        "pattern": "{task_id}.json",
+        "note": "Host creates and mutates state files here. Agent polls for results."
+      }
+    },
+
+    "lifecycle": {
+      "states": ["pending", "leased", "done", "failed", "dead"],
+      "transitions": {
+        "pending_to_leased": "Worker picks up task, sets lease_owner + lease_until",
+        "leased_to_done": "Execution succeeded, result populated",
+        "leased_to_failed": "Transient error, attempts < max_attempts. Worker waits visibility_timeout, then retries (back to pending internally).",
+        "leased_to_dead": "Permanent error, OR attempts >= max_attempts. No more retries.",
+        "pending_to_dead": "Pre-execution validation failure (invalid params, unsupported operation)"
+      },
+      "lease_expiry_recovery": "If status=leased AND lease_until < now, treat as pending. The original worker is assumed crashed. Next scan picks it up.",
+      "terminal_states": ["done", "dead"]
+    },
+
+    "lease_protocol": {
+      "lease_owner": "Worker identifier (hostname:pid or similar). Set when status transitions to leased.",
+      "lease_until": "ISO 8601 UTC timestamp. lease_until = now + visibility_timeout_sec.",
+      "visibility_timeout_sec": "Default 300 (5 min). Configurable per task in request. Time a leased task is invisible to other workers / recovery scans.",
+      "max_attempts": "Default 3. Configurable per task in request. After max_attempts transient failures, task goes dead.",
+      "note": "v1 assumes single worker. Lease exists for crash recovery, not multi-worker concurrency."
+    },
+
+    "retry_classification": {
+      "transient": {
+        "description": "Temporary failure — retry will likely succeed",
+        "codes": ["TIMEOUT", "RATE_LIMITED", "CLI_ERROR", "SERVICE_UNAVAILABLE"],
+        "behavior": "Increment attempts, wait visibility_timeout, retry"
+      },
+      "permanent": {
+        "description": "Will never succeed — do not retry",
+        "codes": ["INVALID_PARAMS", "PERMISSION_DENIED", "NOT_FOUND", "UNSUPPORTED_OPERATION"],
+        "behavior": "Immediately transition to dead"
+      }
+    },
+
+    "idempotency": {
+      "task_id": "12-char hex. If idempotency_key is provided: SHA256(idempotency_key)[:12]. Otherwise: SHA256(random UUID)[:12].",
+      "duplicate_detection": "If state file already exists for task_id, worker skips. Agent should check for existing state before creating duplicate request.",
+      "action_idempotency": "read/list/search are naturally idempotent. create uses idempotency_key to prevent duplicates. Workers should check idempotency_key before executing create operations."
+    },
+
+    "retention": {
+      "default_days": 7,
+      "env_var": "QUEUE_RETAIN_DAYS",
+      "behavior": "After completed_at or dead_at + retain_days, worker deletes BOTH request and state files. Only touches {12-hex}.json files. Pending/leased tasks are never cleaned.",
+      "disable": "Set QUEUE_RETAIN_DAYS=-1"
+    },
+
+    "atomic_writes": {
+      "method": "Write to {task_id}.tmp, then os.rename() to {task_id}.json",
+      "why": "Prevents agent from reading partially-written state files. rename() is atomic on macOS/Linux.",
+      "note": "Both producer and consumer MUST use atomic writes."
+    },
+
+    "polling": {
+      "agent_poll_interval": "Agent checks input/queue/{task_id}.json every 5-10s after creating a request.",
+      "worker_scan_interval": "Worker scans output/queue/ every 5-10s for new requests.",
+      "note": "File-based polling is simple but adds latency. Acceptable for v1 (<100 tasks/day)."
+    }
+  },
+
+  "request_schema": {
+    "type": "object",
+    "description": "Task request file created by the agent in workspace/output/queue/. Immutable once written.",
+    "required": ["schema_version", "task_id", "created_at", "action"],
+    "properties": {
+      "schema_version": {
+        "type": "string",
+        "const": "1.0.0"
+      },
+      "task_id": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{12}$",
+        "description": "12-char hex identifier. Also the filename stem."
+      },
+      "created_at": {
+        "type": "string",
+        "format": "date-time",
+        "description": "ISO 8601 UTC timestamp when agent created this request"
+      },
+      "action": {
+        "$ref": "#/definitions/TaskAction"
+      },
+      "priority": {
+        "type": "string",
+        "enum": ["normal", "high"],
+        "default": "normal",
+        "description": "High-priority tasks are processed before normal in the scan order."
+      },
+      "idempotency_key": {
+        "type": ["string", "null"],
+        "description": "Optional. If set, task_id = SHA256(idempotency_key)[:12]. Used for dedup on create operations."
+      },
+      "max_attempts": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10,
+        "default": 3,
+        "description": "Max retry attempts for transient errors before dead-letter."
+      },
+      "visibility_timeout_sec": {
+        "type": "integer",
+        "minimum": 30,
+        "maximum": 3600,
+        "default": 300,
+        "description": "Seconds to wait between retries and for lease expiry."
+      }
+    },
+    "additionalProperties": false
+  },
+
+  "state_schema": {
+    "type": "object",
+    "description": "Task state file created and mutated by the host worker in workspace/input/queue/. Agent reads this to poll for results.",
+    "required": ["schema_version", "task_id", "status", "attempts"],
+    "properties": {
+      "schema_version": {
+        "type": "string",
+        "const": "1.0.0"
+      },
+      "task_id": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{12}$",
+        "description": "Matches the request file task_id."
+      },
+      "status": {
+        "type": "string",
+        "enum": ["pending", "leased", "done", "failed", "dead"]
+      },
+      "attempts": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Number of execution attempts so far."
+      },
+      "lease_owner": {
+        "type": ["string", "null"],
+        "description": "Worker identifier. Set when leased, cleared on release."
+      },
+      "lease_until": {
+        "type": ["string", "null"],
+        "format": "date-time",
+        "description": "Lease expiry. If now > lease_until and status=leased, lease has expired."
+      },
+      "first_seen_at": {
+        "type": "string",
+        "format": "date-time",
+        "description": "When the worker first detected this request."
+      },
+      "last_attempt_at": {
+        "type": ["string", "null"],
+        "format": "date-time"
+      },
+      "completed_at": {
+        "type": ["string", "null"],
+        "format": "date-time",
+        "description": "Set when status transitions to done."
+      },
+      "dead_at": {
+        "type": ["string", "null"],
+        "format": "date-time",
+        "description": "Set when status transitions to dead."
+      },
+      "result": {
+        "oneOf": [
+          { "$ref": "#/definitions/TaskResult" },
+          { "type": "null" }
+        ],
+        "description": "Populated on status=done. Service-specific response data."
+      },
+      "error": {
+        "oneOf": [
+          { "$ref": "#/definitions/TaskError" },
+          { "type": "null" }
+        ],
+        "description": "Populated on status=failed or status=dead. Last error encountered."
+      }
+    },
+    "additionalProperties": false
+  },
+
+  "definitions": {
+    "TaskAction": {
+      "type": "object",
+      "required": ["service", "operation"],
+      "properties": {
+        "service": {
+          "type": "string",
+          "enum": ["notes", "reminders", "imessage"],
+          "description": "Target Apple service"
+        },
+        "operation": {
+          "type": "string",
+          "enum": ["list", "read", "create", "search", "send", "delete"],
+          "description": "Operation to perform. Available operations vary by service."
+        },
+        "params": {
+          "type": "object",
+          "description": "Service-specific parameters. Validated by the worker, not the schema.",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "TaskResult": {
+      "type": "object",
+      "required": ["service", "operation", "data"],
+      "properties": {
+        "service": {
+          "type": "string",
+          "description": "Echoes the request service"
+        },
+        "operation": {
+          "type": "string",
+          "description": "Echoes the request operation"
+        },
+        "data": {
+          "description": "Operation-specific result. Object for structured results, string for simple responses, array for list operations.",
+          "type": ["object", "string", "array"]
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "TaskError": {
+      "type": "object",
+      "required": ["type", "code", "message"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["transient", "permanent"],
+          "description": "Transient errors are retried. Permanent errors go to dead-letter."
+        },
+        "code": {
+          "type": "string",
+          "enum": [
+            "TIMEOUT",
+            "RATE_LIMITED",
+            "CLI_ERROR",
+            "SERVICE_UNAVAILABLE",
+            "INVALID_PARAMS",
+            "PERMISSION_DENIED",
+            "NOT_FOUND",
+            "UNSUPPORTED_OPERATION"
+          ],
+          "description": "Machine-readable error code for retry classification."
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable error description."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+
+  "service_operations": {
+    "notes": {
+      "list": { "params": { "folder": "optional string" }, "result": "array of {title, id}" },
+      "read": { "params": { "title": "string (exact match)" }, "result": "{title, body, folder}" },
+      "create": { "params": { "title": "string", "body": "string", "folder": "optional string" }, "result": "{title, id}" },
+      "search": { "params": { "query": "string" }, "result": "array of {title, snippet}" }
+    },
+    "reminders": {
+      "list": { "params": { "list_name": "optional string" }, "result": "array of {title, due, completed}" },
+      "create": { "params": { "title": "string", "due": "optional ISO8601", "list_name": "optional string" }, "result": "{title, id}" },
+      "delete": { "params": { "title": "string" }, "result": "{deleted: true}" }
+    },
+    "imessage": {
+      "send": { "params": { "to": "phone or email", "text": "string" }, "result": "{sent: true}" },
+      "list": { "params": { "limit": "optional integer, default 10" }, "result": "array of {chat_id, display_name, last_message_at}" },
+      "read": { "params": { "chat_id": "string", "limit": "optional integer, default 20" }, "result": "array of {sender, text, date}" }
+    }
+  },
+
+  "examples": {
+    "request": {
+      "schema_version": "1.0.0",
+      "task_id": "a1b2c3d4e5f6",
+      "created_at": "2026-02-08T22:00:00Z",
+      "action": {
+        "service": "notes",
+        "operation": "read",
+        "params": { "title": "Shopping List" }
+      },
+      "priority": "normal",
+      "idempotency_key": null,
+      "max_attempts": 3,
+      "visibility_timeout_sec": 300
+    },
+    "state_done": {
+      "schema_version": "1.0.0",
+      "task_id": "a1b2c3d4e5f6",
+      "status": "done",
+      "attempts": 1,
+      "lease_owner": null,
+      "lease_until": null,
+      "first_seen_at": "2026-02-08T22:00:01Z",
+      "last_attempt_at": "2026-02-08T22:00:02Z",
+      "completed_at": "2026-02-08T22:00:03Z",
+      "dead_at": null,
+      "result": {
+        "service": "notes",
+        "operation": "read",
+        "data": { "title": "Shopping List", "body": "Milk\nEggs\nBread", "folder": "Personal" }
+      },
+      "error": null
+    }
+  }
+}

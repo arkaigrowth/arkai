@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0.0",
+  "task_id": "d1a7c435529f",
+  "status": "done",
+  "attempts": 1,
+  "lease_owner": null,
+  "lease_until": null,
+  "first_seen_at": "2026-02-08T22:00:01+00:00",
+  "last_attempt_at": "2026-02-08T22:00:02+00:00",
+  "completed_at": "2026-02-08T22:00:03+00:00",
+  "dead_at": null,
+  "result": {
+    "service": "notes",
+    "operation": "read",
+    "data": {
+      "title": "Shopping List",
+      "body": "Milk\nEggs\nBread\nButter",
+      "folder": "Personal"
+    }
+  },
+  "error": null
+}
