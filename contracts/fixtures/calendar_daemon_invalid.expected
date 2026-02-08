@@ -1,0 +1,18 @@
+Expected validator output for calendar_daemon_invalid.json
+Exit code: 1
+
+  FAIL  contracts/fixtures/calendar_daemon_invalid.json
+        - schema_version must be '1.0.0', got '2.0.0'
+        - event.calendar_name missing
+        - event.id must be 12-char hex, got 'NOTAHEXID'
+        - event.status must be one of {'confirmed', 'cancelled', 'tentative'}, got 'maybe'
+        - event.attendees[0].response_status must be one of {'needsAction', 'accepted', 'declined', 'tentative'}, got 'maybe_later'
+        - Unexpected top-level fields: {'extra_field'}
+
+6 violations caught:
+  1. Wrong schema version (2.0.0 vs 1.0.0)
+  2. Missing required field (event.calendar_name)
+  3. Invalid ID pattern (not 12-char hex)
+  4. Invalid enum value (event.status)
+  5. Invalid enum value (attendee response_status)
+  6. Extra top-level field not in schema
