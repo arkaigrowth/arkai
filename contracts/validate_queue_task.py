@@ -39,6 +39,12 @@ VALID_SERVICES = {"notes", "reminders", "imessage"}
 VALID_OPERATIONS = {"list", "read", "create", "search", "send", "delete"}
 VALID_PRIORITIES = {"normal", "high"}
 
+VALID_SERVICE_OPERATIONS = {
+    "notes": {"list", "read", "create", "search"},
+    "reminders": {"list", "create", "delete"},
+    "imessage": {"send", "list", "read"},
+}
+
 REQUIRED_REQUEST_FIELDS = {"schema_version", "task_id", "created_at", "action"}
 ALLOWED_REQUEST_FIELDS = {
     "schema_version", "task_id", "created_at", "action",
@@ -97,7 +103,7 @@ def validate_request(data: dict, filepath: str) -> list[str]:
     errors = []
 
     # Required fields
-    for field in REQUIRED_REQUEST_FIELDS:
+    for field in sorted(REQUIRED_REQUEST_FIELDS):
         if field not in data:
             errors.append(f"Missing required field: {field}")
 
@@ -112,36 +118,60 @@ def validate_request(data: dict, filepath: str) -> list[str]:
     if not TASK_ID_PATTERN.match(str(data["task_id"])):
         errors.append(f"task_id must be 12-char hex, got '{data['task_id']}'")
 
+    # created_at RFC3339
+    try:
+        datetime.fromisoformat(data["created_at"])
+    except (ValueError, TypeError):
+        errors.append(f"created_at must be RFC3339, got '{data['created_at']}'")
+
     # action
     action = data["action"]
     if not isinstance(action, dict):
         errors.append(f"action must be object, got {type(action).__name__}")
         return errors
 
-    for field in REQUIRED_ACTION_FIELDS:
+    for field in sorted(REQUIRED_ACTION_FIELDS):
         if field not in action:
             errors.append(f"action.{field} missing")
 
     if "service" in action and action["service"] not in VALID_SERVICES:
         errors.append(
-            f"action.service must be one of {VALID_SERVICES}, got '{action['service']}'"
+            f"action.service must be one of {sorted(VALID_SERVICES)}, got '{action['service']}'"
         )
 
     if "operation" in action and action["operation"] not in VALID_OPERATIONS:
         errors.append(
-            f"action.operation must be one of {VALID_OPERATIONS}, got '{action['operation']}'"
+            f"action.operation must be one of {sorted(VALID_OPERATIONS)}, got '{action['operation']}'"
         )
+
+    # Service/operation pair validity (only when both individually valid)
+    if "service" in action and "operation" in action:
+        svc = action["service"]
+        op = action["operation"]
+        if svc in VALID_SERVICE_OPERATIONS and op in VALID_OPERATIONS:
+            if op not in VALID_SERVICE_OPERATIONS[svc]:
+                valid_ops = sorted(VALID_SERVICE_OPERATIONS[svc])
+                errors.append(
+                    f"action.operation '{op}' not valid for service '{svc}' "
+                    f"(valid: {valid_ops})"
+                )
 
     # Extra action fields
     extra_action = set(action.keys()) - ALLOWED_ACTION_FIELDS
     if extra_action:
-        errors.append(f"Unexpected action fields: {extra_action}")
+        errors.append(f"Unexpected action fields: {sorted(extra_action)}")
 
     # priority
     if "priority" in data and data["priority"] not in VALID_PRIORITIES:
         errors.append(
-            f"priority must be one of {VALID_PRIORITIES}, got '{data['priority']}'"
+            f"priority must be one of {sorted(VALID_PRIORITIES)}, got '{data['priority']}'"
         )
+
+    # create => idempotency_key required
+    if "operation" in action and action["operation"] == "create":
+        key = data.get("idempotency_key")
+        if key is None:
+            errors.append("idempotency_key is required when action.operation is 'create'")
 
     # max_attempts range
     if "max_attempts" in data:
@@ -158,7 +188,7 @@ def validate_request(data: dict, filepath: str) -> list[str]:
     # Extra top-level fields
     extra = set(data.keys()) - ALLOWED_REQUEST_FIELDS
     if extra:
-        errors.append(f"Unexpected fields: {extra}")
+        errors.append(f"Unexpected fields: {sorted(extra)}")
 
     return errors
 
@@ -171,7 +201,7 @@ def validate_state(data: dict, filepath: str) -> list[str]:
     errors = []
 
     # Required fields
-    for field in REQUIRED_STATE_FIELDS:
+    for field in sorted(REQUIRED_STATE_FIELDS):
         if field not in data:
             errors.append(f"Missing required field: {field}")
 
@@ -189,7 +219,7 @@ def validate_state(data: dict, filepath: str) -> list[str]:
     # status
     status = data["status"]
     if status not in VALID_STATUSES:
-        errors.append(f"status must be one of {VALID_STATUSES}, got '{status}'")
+        errors.append(f"status must be one of {sorted(VALID_STATUSES)}, got '{status}'")
         return errors
 
     # attempts
@@ -208,6 +238,10 @@ def validate_state(data: dict, filepath: str) -> list[str]:
         if data.get("dead_at") is None:
             errors.append("status=dead requires dead_at to be set")
 
+    if status in ("failed", "dead"):
+        if data.get("error") is None:
+            errors.append(f"status={status} requires error to be set")
+
     if status == "leased":
         if data.get("lease_owner") is None:
             errors.append("status=leased requires lease_owner to be set")
@@ -220,7 +254,7 @@ def validate_state(data: dict, filepath: str) -> list[str]:
         if not isinstance(result, dict):
             errors.append(f"result must be object, got {type(result).__name__}")
         else:
-            for field in REQUIRED_RESULT_FIELDS:
+            for field in sorted(REQUIRED_RESULT_FIELDS):
                 if field not in result:
                     errors.append(f"result.{field} missing")
 
@@ -230,18 +264,18 @@ def validate_state(data: dict, filepath: str) -> list[str]:
         if not isinstance(error, dict):
             errors.append(f"error must be object, got {type(error).__name__}")
         else:
-            for field in REQUIRED_ERROR_FIELDS:
+            for field in sorted(REQUIRED_ERROR_FIELDS):
                 if field not in error:
                     errors.append(f"error.{field} missing")
 
             if "type" in error and error["type"] not in VALID_ERROR_TYPES:
                 errors.append(
-                    f"error.type must be one of {VALID_ERROR_TYPES}, got '{error['type']}'"
+                    f"error.type must be one of {sorted(VALID_ERROR_TYPES)}, got '{error['type']}'"
                 )
 
             if "code" in error and error["code"] not in VALID_ERROR_CODES:
                 errors.append(
-                    f"error.code must be one of {VALID_ERROR_CODES}, got '{error['code']}'"
+                    f"error.code must be one of {sorted(VALID_ERROR_CODES)}, got '{error['code']}'"
                 )
 
             # Consistency: error type matches code classification
@@ -260,7 +294,7 @@ def validate_state(data: dict, filepath: str) -> list[str]:
     # Extra top-level fields
     extra = set(data.keys()) - ALLOWED_STATE_FIELDS
     if extra:
-        errors.append(f"Unexpected fields: {extra}")
+        errors.append(f"Unexpected fields: {sorted(extra)}")
 
     return errors
 
@@ -350,7 +384,7 @@ def validate_file(
 
     if errors:
         print(f"  FAIL  {filepath} ({label})")
-        for err in errors:
+        for err in sorted(errors):
             print(f"        - {err}")
         return False
 

@@ -3,8 +3,8 @@
   "task_id": "BADTASKID123",
   "created_at": "not-a-date",
   "action": {
-    "service": "contacts",
-    "operation": "hack",
+    "service": "imessage",
+    "operation": "create",
     "params": {}
   },
   "priority": "urgent",
