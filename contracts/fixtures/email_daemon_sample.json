@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0.0",
+  "processed_at": "2026-02-07T14:30:00+00:00",
+  "email": {
+    "id": "a1b2c3d4e5f6",
+    "message_id": "18d5a7b3c9e0f123",
+    "thread_id": "18d5a7b3c9e0f100",
+    "sender": "boss@company.com",
+    "to": ["me@example.com"],
+    "subject": "Q1 Review - Action Required",
+    "snippet": "Please review the Q1 numbers and send me your analysis by Friday...",
+    "received_at": "2026-02-07T10:30:00+00:00",
+    "labels": ["INBOX", "UNREAD"]
+  },
+  "gate": {
+    "result": "process",
+    "reason": "VIP sender: boss@company.com",
+    "flagged": false
+  },
+  "classification": {
+    "category": "PRIORITY",
+    "confidence": 0.95,
+    "summary": "Boss requesting Q1 analysis by Friday",
+    "key_points": ["Q1 review needed", "Deadline: Friday"],
+    "action_items": ["Review Q1 numbers", "Send analysis"],
+    "reasoning": "Direct request from manager with clear deadline"
+  },
+  "proposed_actions": [
+    {
+      "action": "add_label",
+      "label": "arkai/Priority",
+      "reason": "Classified as PRIORITY with 95% confidence"
+    }
+  ],
+  "critic_verdict": {
+    "decision": "APPROVE",
+    "rule_hits": []
+  }
+}
