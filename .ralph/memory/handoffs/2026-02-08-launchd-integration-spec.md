@@ -105,9 +105,7 @@ GMAIL_CONFIG_DIR=~/.arkai-gmail/  # OAuth token location (default)
         <string>-c</string>
         <string>
 GCAL_OUTPUT_DIR="$HOME/AI/openclaw-local/workspace/input/calendar" \
-GCAL_CONFIG_DIR="$HOME/.arkai-calendar" \
-"$HOME/AI/arkai-gmail/.venv/bin/python3" \
-"$HOME/AI/arkai-gmail/scripts/calendar_daemon.py"
+"$HOME/AI/arkai-gmail/scripts/calendar_daemon_wrapper.sh"
         </string>
     </array>
 
