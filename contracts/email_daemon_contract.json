@@ -1,0 +1,341 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arkai.dev/schemas/email_daemon_contract.json",
+  "title": "Email Triage Daemon Contract",
+  "description": "Contract between the arkai-gmail triage daemon and the OpenClaw agent. ADR-0002 Option C: daemon runs on host, writes JSON to workspace/input/emails/, agent reads via safe_fs_read_text.",
+  "version": "1.0.0",
+
+  "contract": {
+    "entrypoint": {
+      "path": "~/AI/arkai-gmail/scripts/triage_daemon.py",
+      "interpreter": "~/AI/arkai-gmail/.venv/bin/python3",
+      "note": "One-shot script, NOT a persistent daemon. Run via launchd/cron on schedule.",
+      "canonical_launch_command": "ANTHROPIC_API_KEY=\"$(security find-generic-password -s openclaw-anthropic -w)\" GMAIL_OUTPUT_DIR=\"$HOME/AI/openclaw-local/workspace/input/emails\" PYTHONPATH=\"$HOME/AI/arkai-gmail/src\" $HOME/AI/arkai-gmail/.venv/bin/python3 $HOME/AI/arkai-gmail/scripts/triage_daemon.py",
+      "canonical_launch_note": "All logging goes to stderr (launchd StandardErrorPath). Stdout is clean. Exit 0 = success, exit 1 = fatal."
+    },
+
+    "environment_variables": {
+      "required": {
+        "ANTHROPIC_API_KEY": {
+          "description": "Anthropic API key for Reader LLM (Sonnet classification)",
+          "source": "macOS Keychain or environment"
+        }
+      },
+      "optional": {
+        "GMAIL_OUTPUT_DIR": {
+          "description": "Directory to write JSON result files",
+          "default": "~/AI/openclaw-local/workspace/input/emails/",
+          "note": "Must be readable by OpenClaw container (Docker volume mount)"
+        },
+        "GMAIL_CONFIG_DIR": {
+          "description": "arkai-gmail config directory (OAuth tokens, history ID)",
+          "default": "~/.arkai-gmail/"
+        },
+        "GMAIL_TRIAGE_LIMIT": {
+          "description": "Maximum emails to process per run",
+          "default": "10",
+          "type": "integer string"
+        },
+        "GMAIL_GATE_CONFIG": {
+          "description": "Path to gates.yaml config for pre-AI filtering",
+          "default": "auto-detected from arkai-gmail package"
+        },
+        "GMAIL_RETAIN_DAYS": {
+          "description": "Delete output JSON files older than N days. Prevents unbounded growth.",
+          "default": "7",
+          "type": "integer string",
+          "note": "Set to 0 to disable retention cleanup. Only deletes files matching {12-hex}.json pattern."
+        }
+      }
+    },
+
+    "output_directory": {
+      "path": "~/AI/openclaw-local/workspace/input/emails/",
+      "file_pattern": "{email_id}.json",
+      "file_naming": "12-char hex SHA256 triage ID (deterministic, idempotent)",
+      "example_filename": "a1b2c3d4e5f6.json",
+      "encoding": "UTF-8",
+      "idempotency": "Same email always produces same filename. Re-runs overwrite, not duplicate."
+    },
+
+    "failure_semantics": {
+      "per_email": "Log error to stderr, skip failed email, continue pipeline",
+      "fatal": "Exit code 1 for auth failure, missing API key, or config issues",
+      "success": "Exit code 0 even if 0 emails were processed (no new mail is not an error)",
+      "retry_safe": true,
+      "note": "Idempotent — safe to re-run. Gmail history ID tracks what was already fetched."
+    },
+
+    "retention": {
+      "default_days": 7,
+      "env_var": "GMAIL_RETAIN_DAYS",
+      "behavior": "After each triage run, delete *.json files in output_dir older than retain_days. Only deletes files matching /^[a-f0-9]{12}\\.json$/ pattern (won't touch other files).",
+      "disable": "Set GMAIL_RETAIN_DAYS=0"
+    },
+
+    "scheduling": {
+      "recommended_interval": "5-15 minutes",
+      "mechanism": "launchd plist (macOS) or cron",
+      "concurrency": "Single instance only. No locking needed — Gmail history ID prevents duplicates.",
+      "note": "Each run takes ~3-8s per email (LLM API call). 10 emails ≈ 30-80s."
+    },
+
+    "prerequisites": {
+      "gmail_auth": "Must run 'arkai-gmail auth' once to complete OAuth flow",
+      "anthropic_key": "ANTHROPIC_API_KEY must be set",
+      "python_venv": "Uses ~/AI/arkai-gmail/.venv/bin/python3 — NOT system Python. All deps pre-installed."
+    },
+
+    "oauth_scope_note": {
+      "current_scopes": ["gmail.readonly", "gmail.modify"],
+      "daemon_uses": "gmail.readonly only (classify-only, no write operations)",
+      "why_not_reduced_yet": "Reducing scope would break arkai-gmail CLI --execute mode (labeling, archiving). Scope reduction deferred until daemon and CLI auth are split.",
+      "security_mitigation": "Token stays on host at ~/.arkai-gmail/token.json. Never enters Docker container (ADR-0002)."
+    }
+  },
+
+  "output_schema": {
+    "type": "object",
+    "description": "One JSON file per classified email. This is the exact schema of each output file.",
+    "required": ["schema_version", "processed_at", "email", "gate"],
+    "properties": {
+      "schema_version": {
+        "type": "string",
+        "const": "1.0.0",
+        "description": "Schema version for forward compatibility"
+      },
+      "processed_at": {
+        "type": "string",
+        "format": "date-time",
+        "description": "ISO 8601 UTC timestamp when this email was processed"
+      },
+      "email": {
+        "$ref": "#/definitions/DaemonEmailMeta"
+      },
+      "gate": {
+        "$ref": "#/definitions/DaemonGateResult"
+      },
+      "classification": {
+        "oneOf": [
+          { "$ref": "#/definitions/DaemonClassification" },
+          { "type": "null" }
+        ],
+        "description": "Reader LLM classification (null if gate skipped)"
+      },
+      "proposed_actions": {
+        "type": "array",
+        "items": { "$ref": "#/definitions/DaemonProposedAction" },
+        "description": "Actions proposed by Reader, validated by Critic"
+      },
+      "critic_verdict": {
+        "oneOf": [
+          { "$ref": "#/definitions/DaemonCriticVerdict" },
+          { "type": "null" }
+        ],
+        "description": "Critic's evaluation (null if not classified)"
+      }
+    },
+    "additionalProperties": false
+  },
+
+  "definitions": {
+    "DaemonEmailMeta": {
+      "type": "object",
+      "required": ["id", "message_id", "thread_id", "sender", "subject", "received_at"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{12}$",
+          "description": "12-char SHA256 triage ID (also the filename stem)"
+        },
+        "message_id": {
+          "type": "string",
+          "description": "Gmail API message ID"
+        },
+        "thread_id": {
+          "type": "string",
+          "description": "Gmail API thread ID"
+        },
+        "sender": {
+          "type": "string",
+          "description": "From address (e.g., 'Name <email@domain.com>')"
+        },
+        "to": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Recipient addresses"
+        },
+        "subject": {
+          "type": "string",
+          "description": "Email subject line"
+        },
+        "snippet": {
+          "type": ["string", "null"],
+          "description": "Gmail preview snippet (~100 chars)"
+        },
+        "received_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When email was received (ISO 8601)"
+        },
+        "labels": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Gmail label IDs at time of processing"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "DaemonGateResult": {
+      "type": "object",
+      "required": ["result", "reason", "flagged"],
+      "properties": {
+        "result": {
+          "type": "string",
+          "enum": ["process", "skip", "flag"],
+          "description": "Gate decision"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why this decision was made"
+        },
+        "flagged": {
+          "type": "boolean",
+          "description": "True if suspicious patterns were detected"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "DaemonClassification": {
+      "type": "object",
+      "required": ["category", "confidence", "summary", "reasoning"],
+      "properties": {
+        "category": {
+          "type": "string",
+          "enum": ["PRIORITY", "NEEDS_REPLY", "FYI", "NEWSLETTER", "RECEIPT", "SPAM_ISH"],
+          "description": "Primary email classification"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Classification confidence (0.0-1.0)"
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "One-line summary"
+        },
+        "key_points": {
+          "type": "array",
+          "items": { "type": "string" },
+          "maxItems": 5,
+          "description": "Key points extracted"
+        },
+        "action_items": {
+          "type": ["array", "null"],
+          "items": { "type": "string" },
+          "maxItems": 3,
+          "description": "Action items mentioned"
+        },
+        "reasoning": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Why this classification"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "DaemonProposedAction": {
+      "type": "object",
+      "required": ["action", "reason"],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["add_label", "remove_label", "archive", "mark_read", "mark_unread", "star", "unstar", "create_draft", "snooze", "forward"],
+          "description": "Proposed action type"
+        },
+        "label": {
+          "type": ["string", "null"],
+          "description": "Label name (for label actions)"
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Why this action was proposed"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "DaemonCriticVerdict": {
+      "type": "object",
+      "required": ["decision"],
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": ["APPROVE", "HUMAN_REVIEW", "BLOCK"],
+          "description": "Critic's decision"
+        },
+        "rule_hits": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Rule codes that fired (e.g., 'R001_NEWSLETTER_FORWARD')"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+
+  "validation": {
+    "classify_only": "Daemon imports GmailIngestion, PreAIGate, ReaderLLM, Critic only. Actor is NOT imported. No Gmail write API calls exist in triage_daemon.py. Verified: `grep -c 'actor\\|execute\\|modify\\|label\\|archive' scripts/triage_daemon.py` returns 0 hits on Gmail API write methods.",
+    "retention": "Tested: fresh file (mtime=now) survives, old file (mtime=30d ago) deleted, non-matching file (readme.txt) untouched. Pattern: /^[a-f0-9]{12}\\.json$/. Default: 7 days.",
+    "output_roundtrip": "DaemonTriageResult → model_dump_json() → model_validate_json() round-trip verified. All fields survive serialization.",
+    "validated_at": "2026-02-07"
+  },
+
+  "examples": [
+    {
+      "schema_version": "1.0.0",
+      "processed_at": "2026-02-07T14:30:00Z",
+      "email": {
+        "id": "a1b2c3d4e5f6",
+        "message_id": "18d5a7b3c9e0f123",
+        "thread_id": "18d5a7b3c9e0f100",
+        "sender": "boss@company.com",
+        "to": ["me@example.com"],
+        "subject": "Q1 Review - Action Required",
+        "snippet": "Please review the Q1 numbers...",
+        "received_at": "2026-02-07T10:30:00Z",
+        "labels": ["INBOX", "UNREAD"]
+      },
+      "gate": {
+        "result": "process",
+        "reason": "VIP sender: boss@company.com",
+        "flagged": false
+      },
+      "classification": {
+        "category": "PRIORITY",
+        "confidence": 0.95,
+        "summary": "Boss requesting Q1 analysis by Friday",
+        "key_points": ["Q1 review needed", "Deadline: Friday"],
+        "action_items": ["Review Q1 numbers", "Send analysis"],
+        "reasoning": "Direct request from manager with clear deadline"
+      },
+      "proposed_actions": [
+        {
+          "action": "add_label",
+          "label": "arkai/Priority",
+          "reason": "Classified as PRIORITY with 95% confidence"
+        }
+      ],
+      "critic_verdict": {
+        "decision": "APPROVE",
+        "rule_hits": []
+      }
+    }
+  ]
+}

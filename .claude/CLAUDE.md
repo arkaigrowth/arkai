@@ -291,4 +291,67 @@ tell-claudia "test message"
 
 ---
 
+## Sibling Repo: openclaw-local
+
+Arkai will eventually wire into OpenClaw, which is deployed from `~/AI/openclaw-local/`.
+
+### What openclaw-local is
+- Docker Compose deployment for an OpenClaw gateway (AI agent runtime)
+- Managed by both **Claude Code** and **Codex** as dev tools
+- The Docker container sees only: `data/`, `workspace/output/`, `workspace/input/`, `extensions/`
+- Everything else (scripts, docs, agent instructions) is dev-side only
+
+### Three-layer architecture
+```
+Layer 1: Dev Tools (Claude Code, Codex)
+  AGENTS.md        ← canonical agent instructions (both tools read this)
+  CLAUDE.md        ← Claude Code bootstrap → points to AGENTS.md
+  docs/CONTEXT.md  ← live shared state and decisions
+  docs/THREADS.md  ← active work tracking
+  docs/ai/         ← shared research, decisions, handoffs
+
+Layer 2: OpenClaw Config (Docker runtime)
+  data/openclaw.json  ← gateway config, sessions, credentials
+
+Layer 3: OpenClaw Agent Workspace (AI agent inside Docker)
+  workspace/output/   ← agent writes here (has its own nested instructions)
+  workspace/input/    ← read-only input for the agent
+```
+
+### AI Coordination Protocol (docs/ai/)
+Cross-tool shared workspace, git-tracked, NOT mounted into Docker:
+- `docs/ai/research/YYYY-MM-DD-topic.md` — investigation reports, subagent findings
+- `docs/ai/decisions/NNNN-title.md` — Architecture Decision Records
+- `docs/ai/handoffs/YYYY-MM-DD-tool-summary.md` — cross-session/cross-tool handoffs
+- Full protocol: `docs/ai/README.md`
+
+### Key conventions
+- Secrets: macOS Keychain only, never in git
+- Gateway: localhost-bound (`127.0.0.1:18789`)
+- Apple CLI Bridge: native on host (`0.0.0.0:19789`, IP allowlisted)
+- All file mutations inside Docker go through `safe_fs_*` tools (no raw fs access)
+
+### Integration boundary
+- Arkai interacts with OpenClaw via the **gateway API** (port 18789), not by modifying repo files directly
+- Cross-repo decisions use **canonical + pointer** pattern (see ADR-0001 below)
+- Research relevant to both repos goes in openclaw-local's `docs/ai/research/`
+
+### Cross-repo ADR pointers
+- **ADR-0001**: See `~/AI/openclaw-local/docs/ai/decisions/0001-cross-repo-coordination-pattern.md`
+  (Canonical copy lives in openclaw-local. Covers: integration boundary, ADR pattern, contracts/ convention, sibling repo awareness.)
+- **ADR-0002**: See `~/AI/openclaw-local/docs/ai/decisions/0002-email-triage-integration-pattern.md`
+  (Option C: daemon pattern. Host-side triage_daemon.py classifies emails, writes JSON to workspace/input/emails/. Contract: `contracts/email_daemon_contract.json`)
+
+### Sibling repo: arkai-gmail
+- **`~/AI/arkai-gmail/`** — Complete email triage pipeline (pre-dates openclaw-local)
+- 5-layer architecture: Ingestion → Pre-AI Gate → Reader LLM → Critic → Actor
+- Reader uses Claude Sonnet, 6-category classifier, JSON-only output
+- Critic: 10-rule deterministic policy gate + SQLite rate limiter
+- Actor: dry-run default, whitelisted actions only
+- 32+ tests, working CLI (`arkai-gmail triage`)
+- **Daemon wrapper**: `scripts/triage_daemon.py` — classify-only pipeline, writes JSON per email
+- **Do not rebuild this.** Evaluate for reuse when wiring email into OpenClaw.
+
+---
+
 *This file is read automatically by Claude Code. Keep it updated as the system evolves.*
