@@ -1,0 +1,20 @@
+{
+  "schema_version": "2.0.0",
+  "processed_at": "2026-02-08T14:30:00+00:00",
+  "event": {
+    "id": "NOTAHEXID",
+    "google_event_id": "some_event",
+    "calendar_id": "cal@example.com",
+    "status": "maybe",
+    "summary": "Bad Event",
+    "start": "2026-02-08T09:00:00-06:00",
+    "end": "2026-02-08T09:30:00-06:00",
+    "attendees": [
+      {
+        "email": "person@example.com",
+        "response_status": "maybe_later"
+      }
+    ]
+  },
+  "extra_field": "should not exist"
+}

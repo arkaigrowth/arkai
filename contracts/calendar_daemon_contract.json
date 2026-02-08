@@ -1,0 +1,343 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arkai.dev/schemas/calendar_daemon_contract.json",
+  "title": "Calendar Daemon Contract",
+  "description": "Contract between the arkai calendar daemon and the OpenClaw agent. Same ADR-0002 pattern as email: daemon runs on host, writes JSON to workspace/input/calendar/, agent reads via safe_fs_read_text.",
+  "version": "1.0.0",
+
+  "contract": {
+    "entrypoint": {
+      "path": "~/AI/arkai-gmail/scripts/calendar_daemon.py",
+      "interpreter": "~/AI/arkai-gmail/.venv/bin/python3",
+      "note": "One-shot script, NOT a persistent daemon. Run via launchd/cron on schedule. Lives in arkai-gmail repo (shares venv + Google API deps).",
+      "canonical_launch_command": "GCAL_OUTPUT_DIR=\"$HOME/AI/openclaw-local/workspace/input/calendar\" GCAL_CONFIG_DIR=\"$HOME/.arkai-calendar\" $HOME/AI/arkai-gmail/.venv/bin/python3 $HOME/AI/arkai-gmail/scripts/calendar_daemon.py",
+      "canonical_launch_note": "No API key needed (uses OAuth token). All logging to stderr. Stdout clean. Exit 0 = success, exit 1 = fatal."
+    },
+
+    "environment_variables": {
+      "required": {},
+      "optional": {
+        "GCAL_OUTPUT_DIR": {
+          "description": "Directory to write per-event JSON + upcoming_index.json",
+          "default": "~/AI/openclaw-local/workspace/input/calendar/",
+          "note": "Must be readable by OpenClaw container (Docker volume mount)"
+        },
+        "GCAL_CONFIG_DIR": {
+          "description": "Config directory (credentials.json + token.json)",
+          "default": "~/.arkai-calendar/",
+          "note": "Separate from ~/.arkai-gmail/ — different OAuth scope"
+        },
+        "GCAL_LOOKAHEAD_DAYS": {
+          "description": "How many days ahead to fetch events",
+          "default": "7",
+          "type": "integer string"
+        },
+        "GCAL_EVENT_LIMIT": {
+          "description": "Maximum events per calendar",
+          "default": "50",
+          "type": "integer string"
+        },
+        "GCAL_RETAIN_DAYS": {
+          "description": "Keep event files N days past event end time. Based on event end, not file mtime.",
+          "default": "3",
+          "type": "integer string",
+          "note": "Set to -1 to disable retention cleanup. Only deletes files matching {12-hex}.json pattern."
+        },
+        "GCAL_CALENDARS": {
+          "description": "Comma-separated calendar IDs to fetch. If empty, fetches all enabled calendars.",
+          "default": "",
+          "note": "Use 'primary' for the main calendar. Example: 'primary,work@group.calendar.google.com'"
+        },
+        "GCAL_SHOW_CANCELLED": {
+          "description": "Include cancelled events in output",
+          "default": "0",
+          "note": "Set to 1 to see cancelled events (status: 'cancelled')"
+        }
+      }
+    },
+
+    "output_directory": {
+      "path": "~/AI/openclaw-local/workspace/input/calendar/",
+      "per_event_pattern": "{event_id}.json",
+      "index_file": "upcoming_index.json",
+      "file_naming": "12-char hex SHA256 of Google event ID (deterministic, idempotent)",
+      "example_filename": "b888dc5501b5.json",
+      "encoding": "UTF-8",
+      "idempotency": "Same event always produces same filename. Re-runs overwrite with latest data. Cancelled events written with status: 'cancelled'."
+    },
+
+    "failure_semantics": {
+      "per_event": "Log error to stderr, skip failed event, continue pipeline",
+      "per_calendar": "Log error to stderr, skip failed calendar, continue with others",
+      "fatal": "Exit code 1 for auth failure or config issues",
+      "success": "Exit code 0 even if 0 events were fetched (empty calendar is not an error)",
+      "retry_safe": true,
+      "note": "Idempotent — safe to re-run. Events are overwritten, not duplicated."
+    },
+
+    "retention": {
+      "default_days": 3,
+      "env_var": "GCAL_RETAIN_DAYS",
+      "behavior": "After each fetch, delete {12-hex}.json files where the event's end time + retain_days is in the past. Based on event end time parsed from the JSON file, not file mtime. Does not delete upcoming_index.json or non-matching files.",
+      "disable": "Set GCAL_RETAIN_DAYS=-1"
+    },
+
+    "scheduling": {
+      "recommended_interval": "15-30 minutes",
+      "mechanism": "launchd plist (macOS) or cron",
+      "concurrency": "Single instance only. No locking needed — events are overwritten idempotently.",
+      "note": "Each run takes 1-3s (Google API calls only, no LLM). Much faster than email daemon."
+    },
+
+    "prerequisites": {
+      "google_calendar_api": "Must enable Google Calendar API in the same GCP project as Gmail",
+      "credentials": "Copy credentials.json from ~/.arkai-gmail/ to ~/.arkai-calendar/ (same OAuth client)",
+      "first_auth": "First run will open browser for calendar.readonly consent (separate from Gmail consent)",
+      "python_venv": "Uses ~/AI/arkai-gmail/.venv/bin/python3 — shares venv with email daemon. All deps pre-installed."
+    },
+
+    "oauth_scope": {
+      "scopes": ["https://www.googleapis.com/auth/calendar.readonly"],
+      "note": "Read-only from day one. No write operations. Token at ~/.arkai-calendar/token.json — never enters Docker container."
+    }
+  },
+
+  "output_schema": {
+    "type": "object",
+    "description": "One JSON file per calendar event. This is the exact schema of each per-event output file.",
+    "required": ["schema_version", "processed_at", "event"],
+    "properties": {
+      "schema_version": {
+        "type": "string",
+        "const": "1.0.0",
+        "description": "Schema version for forward compatibility"
+      },
+      "processed_at": {
+        "type": "string",
+        "format": "date-time",
+        "description": "ISO 8601 UTC timestamp when this event was processed"
+      },
+      "event": {
+        "$ref": "#/definitions/CalendarEventMeta"
+      }
+    },
+    "additionalProperties": false
+  },
+
+  "index_schema": {
+    "type": "object",
+    "description": "The upcoming_index.json summary file. Generated each run.",
+    "required": ["schema_version", "generated_at", "lookahead_days", "events", "count"],
+    "properties": {
+      "schema_version": {
+        "type": "string",
+        "const": "1.0.0"
+      },
+      "generated_at": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "lookahead_days": {
+        "type": "integer"
+      },
+      "events": {
+        "type": "array",
+        "items": { "$ref": "#/definitions/CalendarIndexEntry" }
+      },
+      "count": {
+        "type": "integer"
+      }
+    },
+    "additionalProperties": false
+  },
+
+  "definitions": {
+    "CalendarEventMeta": {
+      "type": "object",
+      "required": ["id", "google_event_id", "calendar_id", "calendar_name", "status", "summary", "start", "end"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{12}$",
+          "description": "12-char SHA256 hex of google_event_id (also the filename stem)"
+        },
+        "google_event_id": {
+          "type": "string",
+          "description": "Original Google Calendar API event ID"
+        },
+        "calendar_id": {
+          "type": "string",
+          "description": "Calendar ID (e.g., 'primary', 'work@group.calendar.google.com')"
+        },
+        "calendar_name": {
+          "type": "string",
+          "description": "Human-readable calendar name (e.g., 'Work Calendar')"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["confirmed", "tentative", "cancelled"],
+          "description": "Event status from Google Calendar API"
+        },
+        "summary": {
+          "type": "string",
+          "description": "Event title"
+        },
+        "description": {
+          "type": ["string", "null"],
+          "description": "Event description/body"
+        },
+        "location": {
+          "type": ["string", "null"],
+          "description": "Event location (physical or virtual)"
+        },
+        "start": {
+          "type": "string",
+          "description": "Event start (ISO 8601 dateTime or YYYY-MM-DD for all-day)"
+        },
+        "end": {
+          "type": "string",
+          "description": "Event end (ISO 8601 dateTime or YYYY-MM-DD for all-day)"
+        },
+        "all_day": {
+          "type": "boolean",
+          "description": "True if this is an all-day event"
+        },
+        "html_link": {
+          "type": ["string", "null"],
+          "description": "URL to view event in Google Calendar"
+        },
+        "organizer": {
+          "type": ["string", "null"],
+          "description": "Organizer email address"
+        },
+        "attendees": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/CalendarAttendee" },
+          "description": "Event attendees"
+        },
+        "conference_url": {
+          "type": ["string", "null"],
+          "description": "Video conference URL (Meet, Zoom, etc.)"
+        },
+        "recurring": {
+          "type": "boolean",
+          "description": "True if this is an instance of a recurring event"
+        },
+        "recurring_event_id": {
+          "type": ["string", "null"],
+          "description": "Parent recurring event ID (if recurring)"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "CalendarAttendee": {
+      "type": "object",
+      "required": ["email", "response_status"],
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "Attendee email address"
+        },
+        "display_name": {
+          "type": ["string", "null"],
+          "description": "Attendee display name"
+        },
+        "response_status": {
+          "type": "string",
+          "enum": ["needsAction", "declined", "tentative", "accepted"],
+          "description": "RSVP status"
+        },
+        "organizer": {
+          "type": "boolean",
+          "description": "True if this attendee is the organizer"
+        },
+        "self": {
+          "type": "boolean",
+          "description": "True if this attendee is the authenticated user"
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "CalendarIndexEntry": {
+      "type": "object",
+      "required": ["id", "summary", "start", "end", "status", "calendar_name"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{12}$"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "start": {
+          "type": "string"
+        },
+        "end": {
+          "type": "string"
+        },
+        "all_day": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["confirmed", "tentative", "cancelled"]
+        },
+        "calendar_name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+
+  "validation": {
+    "no_api_key_needed": "Calendar daemon uses only Google OAuth (calendar.readonly). No ANTHROPIC_API_KEY required. Verified: grep -c 'ANTHROPIC' scripts/calendar_daemon.py returns 0.",
+    "separate_token_store": "Uses ~/.arkai-calendar/token.json, separate from ~/.arkai-gmail/token.json. Different OAuth scopes prevent token reuse.",
+    "retention_by_end_time": "Tested: recent-end event survives, old-end event deleted, future event survives, non-matching file untouched, all-day event end date parsed correctly.",
+    "output_roundtrip": "CalendarDaemonResult → model_dump_json(by_alias=True) → model_validate_json() round-trip verified. Attendee 'self' field aliased correctly.",
+    "validated_at": "2026-02-08"
+  },
+
+  "examples": [
+    {
+      "schema_version": "1.0.0",
+      "processed_at": "2026-02-08T14:30:00Z",
+      "event": {
+        "id": "b888dc5501b5",
+        "google_event_id": "abc123def456ghij",
+        "calendar_id": "alex@example.com",
+        "calendar_name": "Work Calendar",
+        "status": "confirmed",
+        "summary": "Team Standup",
+        "description": "Daily sync on project progress",
+        "location": "Conference Room B",
+        "start": "2026-02-08T09:00:00-06:00",
+        "end": "2026-02-08T09:30:00-06:00",
+        "all_day": false,
+        "html_link": "https://www.google.com/calendar/event?eid=test123",
+        "organizer": "alex@example.com",
+        "attendees": [
+          {
+            "email": "alex@example.com",
+            "display_name": "Alex K",
+            "response_status": "accepted",
+            "organizer": false,
+            "self": true
+          },
+          {
+            "email": "teammate@example.com",
+            "display_name": "Teammate",
+            "response_status": "accepted",
+            "organizer": false,
+            "self": false
+          }
+        ],
+        "conference_url": "https://meet.google.com/abc-defg-hij",
+        "recurring": true,
+        "recurring_event_id": "abc123def456ghij_R20260101"
+      }
+    }
+  ]
+}
