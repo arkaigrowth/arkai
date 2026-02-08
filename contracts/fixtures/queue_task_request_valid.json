@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.0.0",
+  "schema_version": "1.1.0",
   "task_id": "d1a7c435529f",
   "created_at": "2026-02-08T22:00:00+00:00",
   "action": {
@@ -11,6 +11,7 @@
   },
   "priority": "normal",
   "idempotency_key": "notes-read-shopping-list",
+  "integrity_hash": "963060c842f3417c025eeb6d1f768b054a810e828b0030dd2ef5893cb906ea3d",
   "max_attempts": 3,
   "visibility_timeout_sec": 300
 }
