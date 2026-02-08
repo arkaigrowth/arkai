@@ -1,0 +1,28 @@
+Expected validator output for email_daemon_invalid.json
+Exit code: 1
+
+  FAIL  contracts/fixtures/email_daemon_invalid.json
+        - schema_version must be '1.0.0', got '2.0.0'
+        - email.received_at missing
+        - email.id must be 12-char hex, got 'BADID'
+        - gate.flagged missing
+        - gate.result must be one of {'process', 'skip', 'flag'}, got 'invalid_result'
+        - classification.reasoning missing
+        - classification.category must be one of {'PRIORITY', 'FYI', 'NEWSLETTER', 'NEEDS_REPLY', 'RECEIPT', 'SPAM_ISH'}, got 'UNKNOWN_CATEGORY'
+        - classification.confidence must be 0.0-1.0, got 1.5
+        - proposed_actions[0].action must be one of {'star', 'mark_read', 'snooze', 'create_draft', 'unstar', 'remove_label', 'forward', 'add_label', 'mark_unread', 'archive'}, got 'delete_forever'
+        - critic_verdict.decision must be one of {'HUMAN_REVIEW', 'APPROVE', 'BLOCK'}, got 'MAYBE'
+        - Unexpected top-level fields: {'extra_field'}
+
+11 violations caught:
+  1. Wrong schema version (2.0.0 vs 1.0.0)
+  2. Missing required field (email.received_at)
+  3. Invalid ID pattern (not 12-char hex)
+  4. Missing required field (gate.flagged)
+  5. Invalid enum value (gate.result)
+  6. Missing required field (classification.reasoning)
+  7. Invalid enum value (classification.category)
+  8. Out-of-range confidence (1.5 > 1.0)
+  9. Invalid enum value (proposed_actions[0].action)
+  10. Invalid enum value (critic_verdict.decision)
+  11. Extra top-level field not in schema

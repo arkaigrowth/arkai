@@ -1,0 +1,30 @@
+{
+  "schema_version": "2.0.0",
+  "processed_at": "2026-02-07T14:30:00+00:00",
+  "email": {
+    "id": "BADID",
+    "message_id": "18d5a7b3c9e0f123",
+    "thread_id": "18d5a7b3c9e0f100",
+    "sender": "spammer@example.com",
+    "subject": "You won a prize!"
+  },
+  "gate": {
+    "result": "invalid_result",
+    "reason": "Test invalid gate result"
+  },
+  "classification": {
+    "category": "UNKNOWN_CATEGORY",
+    "confidence": 1.5,
+    "summary": "Invalid fixture for negative testing"
+  },
+  "proposed_actions": [
+    {
+      "action": "delete_forever",
+      "reason": "Invalid action type"
+    }
+  ],
+  "critic_verdict": {
+    "decision": "MAYBE"
+  },
+  "extra_field": "should not be here"
+}
