@@ -4,6 +4,9 @@
   "title": "Email Triage Daemon Contract",
   "description": "Contract between the arkai-gmail triage daemon and the OpenClaw agent. ADR-0002 Option C: daemon runs on host, writes JSON to workspace/input/emails/, agent reads via safe_fs_read_text.",
   "version": "1.0.0",
+  "owner_repo": "arkai",
+  "semver": "1.0.0",
+  "adr_pointer": "/Users/alexkamysz/AI/arkai/docs/ai/decisions/0002-host-daemon-file-drop-contracts.md",
 
   "contract": {
     "entrypoint": {
