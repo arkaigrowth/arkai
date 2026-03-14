@@ -4,6 +4,9 @@
   "title": "Queue Task Contract",
   "description": "Contract for Apple CLI bridge task handoff. Producer (OpenClaw agent) writes request files, consumer (host worker) writes state files. Two-directory model respects Docker mount boundaries: output/queue/ for requests, input/queue/ for state+results.",
   "version": "1.1.0",
+  "owner_repo": "arkai",
+  "semver": "1.1.0",
+  "adr_pointer": "/Users/alexkamysz/AI/arkai/contracts/queue_task_adr.md",
 
   "contract": {
     "architecture": {
