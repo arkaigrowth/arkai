@@ -17,7 +17,11 @@
 //! - Embedding model metadata in config table: model swaps are config changes
 
 pub mod db;
+pub mod embedding;
 pub mod migrations;
 pub mod queries;
+pub mod search;
 
 pub use db::{Store, StoreConfig};
+pub use embedding::{cosine_similarity, EmbeddingProvider, OllamaProvider};
+pub use search::{hybrid_search, vector_search, HybridSearchResult};
