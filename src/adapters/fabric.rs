@@ -101,7 +101,12 @@ impl FabricAdapter {
                     pattern, step_timeout
                 )
             })?
-            .with_context(|| format!("Failed to wait for fabric process for pattern '{}'", pattern))?;
+            .with_context(|| {
+                format!(
+                    "Failed to wait for fabric process for pattern '{}'",
+                    pattern
+                )
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -114,18 +119,14 @@ impl FabricAdapter {
             );
         }
 
-        let stdout = String::from_utf8(output.stdout)
-            .context("Fabric output is not valid UTF-8")?;
+        let stdout =
+            String::from_utf8(output.stdout).context("Fabric output is not valid UTF-8")?;
 
         Ok(stdout)
     }
 
     /// Fetch YouTube transcript via fabric -y <url> --transcript-with-timestamps
-    async fn fetch_youtube(
-        &self,
-        url: &str,
-        step_timeout: Duration,
-    ) -> Result<String> {
+    async fn fetch_youtube(&self, url: &str, step_timeout: Duration) -> Result<String> {
         let output = timeout(
             step_timeout,
             Command::new(&self.binary_path)
@@ -148,18 +149,14 @@ impl FabricAdapter {
             );
         }
 
-        let stdout = String::from_utf8(output.stdout)
-            .context("YouTube transcript is not valid UTF-8")?;
+        let stdout =
+            String::from_utf8(output.stdout).context("YouTube transcript is not valid UTF-8")?;
 
         Ok(stdout)
     }
 
     /// Fetch web page content via fabric -u <url>
-    async fn fetch_web(
-        &self,
-        url: &str,
-        step_timeout: Duration,
-    ) -> Result<String> {
+    async fn fetch_web(&self, url: &str, step_timeout: Duration) -> Result<String> {
         let output = timeout(
             step_timeout,
             Command::new(&self.binary_path)
@@ -182,8 +179,7 @@ impl FabricAdapter {
             );
         }
 
-        let stdout = String::from_utf8(output.stdout)
-            .context("Web content is not valid UTF-8")?;
+        let stdout = String::from_utf8(output.stdout).context("Web content is not valid UTF-8")?;
 
         Ok(stdout)
     }
@@ -195,12 +191,7 @@ impl Adapter for FabricAdapter {
         "fabric"
     }
 
-    async fn execute(
-        &self,
-        action: &str,
-        input: &str,
-        timeout: Duration,
-    ) -> Result<AdapterOutput> {
+    async fn execute(&self, action: &str, input: &str, timeout: Duration) -> Result<AdapterOutput> {
         // Handle special actions for content fetching
         let content = match action {
             ACTION_YOUTUBE => {

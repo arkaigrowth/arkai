@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use uuid::Uuid;
 
 use super::artifact::Artifact;
@@ -40,6 +41,10 @@ pub struct Run {
 
     /// Status of each step (step_name -> status)
     pub step_statuses: HashMap<String, StepStatus>,
+
+    /// Additional structured metadata associated with the run
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub metadata: HashMap<String, Value>,
 }
 
 impl Run {
@@ -55,6 +60,7 @@ impl Run {
             current_step: 0,
             artifacts: HashMap::new(),
             step_statuses: HashMap::new(),
+            metadata: HashMap::new(),
         }
     }
 
@@ -77,6 +83,7 @@ impl Run {
             current_step: 0,
             artifacts: HashMap::new(),
             step_statuses: HashMap::new(),
+            metadata: HashMap::new(),
         };
 
         for event in events {
@@ -92,6 +99,11 @@ impl Run {
             EventType::RunStarted => {
                 self.state = RunState::Running;
                 self.started_at = event.timestamp;
+                if let Some(Value::Object(metadata)) = &event.payload {
+                    for (key, value) in metadata {
+                        self.metadata.insert(key.clone(), value.clone());
+                    }
+                }
             }
             EventType::RunCompleted => {
                 self.state = RunState::Completed;
@@ -195,6 +207,7 @@ impl Default for RunState {
 mod tests {
     use super::*;
     use crate::domain::events::Event;
+    use serde_json::json;
 
     #[test]
     fn test_run_creation() {
@@ -204,6 +217,7 @@ mod tests {
         assert_eq!(run.id, run_id);
         assert_eq!(run.pipeline_name, "hello");
         assert!(run.is_running());
+        assert!(run.metadata.is_empty());
     }
 
     #[test]
@@ -250,5 +264,43 @@ mod tests {
         assert_eq!(run.id, run_id);
         assert_eq!(run.state, RunState::Completed);
         assert!(run.is_step_completed("step1"));
+        assert!(run.metadata.is_empty());
+    }
+
+    #[test]
+    fn test_run_from_events_replays_run_started_payload_into_metadata() {
+        let run_id = Uuid::new_v4();
+        let events = vec![Event::new(
+            run_id,
+            None,
+            EventType::RunStarted,
+            format!("{}:start", run_id),
+            "Run started".to_string(),
+            StepStatus::Running,
+        )
+        .with_payload(json!({
+            "component": "checkout-page"
+        }))];
+
+        let run = Run::from_events(&events).unwrap();
+
+        assert_eq!(run.metadata.get("component"), Some(&json!("checkout-page")));
+    }
+
+    #[test]
+    fn test_run_deserialization_defaults_missing_metadata() {
+        let mut run = Run::new(
+            Uuid::new_v4(),
+            "hello".to_string(),
+            "test input".to_string(),
+        );
+        run.metadata.insert("source".to_string(), json!("cli"));
+
+        let mut legacy_json = serde_json::to_value(run).unwrap();
+        legacy_json.as_object_mut().unwrap().remove("metadata");
+
+        let parsed: Run = serde_json::from_value(legacy_json).unwrap();
+
+        assert!(parsed.metadata.is_empty());
     }
 }

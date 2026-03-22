@@ -217,10 +217,7 @@ fn test_default_denylist_patterns() {
 #[test]
 fn test_custom_denylist_patterns() {
     let limits = SafetyLimits {
-        denylist_patterns: vec![
-            "**/*.secret".to_string(),
-            "**/private/*".to_string(),
-        ],
+        denylist_patterns: vec!["**/*.secret".to_string(), "**/private/*".to_string()],
         ..Default::default()
     };
 
@@ -255,8 +252,7 @@ steps:
     input_from: pipeline_input
 "#;
 
-    let pipeline: arkai::core::Pipeline =
-        serde_yaml::from_str(yaml).unwrap();
+    let pipeline: arkai::core::Pipeline = serde_yaml::from_str(yaml).unwrap();
 
     assert_eq!(pipeline.safety_limits.max_steps, 10);
     assert_eq!(pipeline.safety_limits.max_input_bytes, 1048576);

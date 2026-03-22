@@ -135,6 +135,9 @@ impl Step {
 pub enum AdapterType {
     /// Fabric CLI/API
     Fabric,
+
+    /// Shell command executed via /bin/sh -c
+    Shell,
 }
 
 impl Default for AdapterType {
@@ -157,14 +160,10 @@ pub enum InputSource {
     PipelineInput(PipelineInputMarker),
 
     /// Use output from a previous step
-    PreviousStep {
-        previous_step: String,
-    },
+    PreviousStep { previous_step: String },
 
     /// Use a stored artifact
-    Artifact {
-        artifact: String,
-    },
+    Artifact { artifact: String },
 
     /// Static value
     Static {
@@ -237,8 +236,8 @@ impl RetryPolicy {
             return Duration::from_millis(self.initial_delay_ms);
         }
 
-        let delay = self.initial_delay_ms as f64
-            * self.backoff_multiplier.powi((attempt - 1) as i32);
+        let delay =
+            self.initial_delay_ms as f64 * self.backoff_multiplier.powi((attempt - 1) as i32);
 
         let capped = delay.min(self.max_delay_ms as f64) as u64;
         Duration::from_millis(capped)
@@ -319,5 +318,19 @@ steps:
         assert_eq!(policy.delay_for_attempt(3), Duration::from_millis(4000));
         assert_eq!(policy.delay_for_attempt(4), Duration::from_millis(8000));
         assert_eq!(policy.delay_for_attempt(5), Duration::from_millis(10000)); // Capped
+    }
+
+    #[test]
+    fn test_shell_pipeline_fixture_parsing() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("pipelines")
+            .join("test-shell.yaml");
+        let pipeline = Pipeline::from_file(&path).unwrap();
+
+        assert_eq!(pipeline.name, "test-shell");
+        assert_eq!(pipeline.steps.len(), 1);
+        assert_eq!(pipeline.steps[0].adapter, AdapterType::Shell);
+        assert_eq!(pipeline.steps[0].action, "cat");
+        assert!(pipeline.validate().is_ok());
     }
 }

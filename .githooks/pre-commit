@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Pre-commit hook: docs/ai governance enforcement
+#
+# Only fires when docs/ai/ files are staged. Zero overhead on other commits.
+# Works for all agents: Claude Code, Codex, manual.
+#
+# Setup (one-time per clone):
+#   git config core.hooksPath .githooks
+#
+# The verify script checks:
+#   - SHARED-STATE.md ownership (non-owner cannot modify)
+#   - Handoff file requirement for non-owner docs/ai changes
+#   - State-sync commit isolation (SHARED-STATE.md must be committed alone)
+#   - Handoff filename pattern (YYYY-MM-DD-slug.md)
+#   - SHARED-STATE.md required sections
+#
+# Thread identity:
+#   - Codex: set via .codex-thread file or CODEX_THREAD env var
+#   - Claude Code / manual: no thread → treated as non-owner (safe default)
+# =============================================================================
+
+set -euo pipefail
+
+# Only run if docs/ai/ files are staged for this commit.
+staged_docs_ai="$(git diff --cached --name-only -- docs/ai 2>/dev/null || true)"
+if [[ -z "$staged_docs_ai" ]]; then
+    exit 0
+fi
+
+# Resolve repo root (hook may run from subdirectory).
+ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null)"
+VERIFY_SCRIPT="$ROOT_DIR/scripts/verify_ai_docs.sh"
+
+if [[ ! -x "$VERIFY_SCRIPT" ]]; then
+    printf '[HOOK] WARN: %s not found or not executable, skipping governance check\n' "$VERIFY_SCRIPT" >&2
+    exit 0
+fi
+
+printf '[HOOK] docs/ai files staged — running governance checks...\n' >&2
+if ! "$VERIFY_SCRIPT"; then
+    printf '\n[HOOK] Governance check FAILED. Commit blocked.\n' >&2
+    printf '[HOOK] Fix violations above, then retry commit.\n' >&2
+    printf '[HOOK] To bypass (emergency only): git commit --no-verify\n' >&2
+    exit 1
+fi
+
+printf '[HOOK] Governance check passed.\n' >&2

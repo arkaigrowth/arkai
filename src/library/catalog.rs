@@ -107,7 +107,10 @@ impl Catalog {
             .filter(|item| {
                 item.title.to_lowercase().contains(&query_lower)
                     || item.url.to_lowercase().contains(&query_lower)
-                    || item.tags.iter().any(|t| t.to_lowercase().contains(&query_lower))
+                    || item
+                        .tags
+                        .iter()
+                        .any(|t| t.to_lowercase().contains(&query_lower))
             })
             .collect()
     }

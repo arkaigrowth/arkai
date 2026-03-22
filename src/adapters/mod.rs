@@ -14,7 +14,7 @@ use async_trait::async_trait;
 
 // Re-export the Fabric adapter and special actions
 pub use fabric::FabricAdapter;
-pub use fabric::{ACTION_YOUTUBE, ACTION_WEB};
+pub use fabric::{ACTION_WEB, ACTION_YOUTUBE};
 
 // Re-export Telegram adapter
 pub use telegram::{TelegramClient, TelegramConfig};
@@ -53,12 +53,7 @@ pub trait Adapter: Send + Sync {
     fn name(&self) -> &str;
 
     /// Execute an action with input
-    async fn execute(
-        &self,
-        action: &str,
-        input: &str,
-        timeout: Duration,
-    ) -> Result<AdapterOutput>;
+    async fn execute(&self, action: &str, input: &str, timeout: Duration) -> Result<AdapterOutput>;
 
     /// Health check (for HTTP adapters)
     async fn health_check(&self) -> Result<()>;

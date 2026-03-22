@@ -33,6 +33,8 @@ async fn test_event_append_format() {
     assert_eq!(parsed.step_id, Some("summarize".to_string()));
     assert_eq!(parsed.event_type, EventType::StepStarted);
     assert!(parsed.idempotency_key.contains("summarize"));
+    assert_eq!(parsed.payload, None);
+    assert_eq!(parsed.domain_event, None);
     assert_eq!(parsed.status, StepStatus::Running);
 
     // Verify timestamp is valid ISO 8601
@@ -56,6 +58,8 @@ async fn test_event_with_duration_and_error() {
     .with_duration(1500);
 
     assert_eq!(completed.duration_ms, Some(1500));
+    assert_eq!(completed.payload, None);
+    assert_eq!(completed.domain_event, None);
 
     // Test event with error
     let failed = Event::new(
@@ -69,6 +73,8 @@ async fn test_event_with_duration_and_error() {
     .with_error("Connection timeout".to_string());
 
     assert_eq!(failed.error, Some("Connection timeout".to_string()));
+    assert_eq!(failed.payload, None);
+    assert_eq!(failed.domain_event, None);
 }
 
 #[tokio::test]
@@ -186,7 +192,9 @@ mod event_store_test {
                 .unwrap();
 
             let json = serde_json::to_string(event).unwrap();
-            file.write_all(format!("{}\n", json).as_bytes()).await.unwrap();
+            file.write_all(format!("{}\n", json).as_bytes())
+                .await
+                .unwrap();
             file.flush().await.unwrap();
         }
 

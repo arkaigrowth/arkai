@@ -56,8 +56,7 @@ impl IdempotencyTestStore {
     async fn is_step_completed(&self, idempotency_key: &str) -> bool {
         let events = self.replay().await;
         events.iter().any(|e| {
-            e.idempotency_key == idempotency_key
-                && matches!(e.event_type, EventType::StepCompleted)
+            e.idempotency_key == idempotency_key && matches!(e.event_type, EventType::StepCompleted)
         })
     }
 }
@@ -113,7 +112,11 @@ async fn test_idempotency_key_format() {
 
     // Verify format: {run_id}:{step}:{input_hash[0:16]}
     let parts: Vec<&str> = key.split(':').collect();
-    assert_eq!(parts.len(), 3, "Key should have 3 parts separated by colons");
+    assert_eq!(
+        parts.len(),
+        3,
+        "Key should have 3 parts separated by colons"
+    );
 
     // Verify run_id part
     assert_eq!(parts[0], "550e8400-e29b-41d4-a716-446655440000");
