@@ -11,6 +11,7 @@ Cargo.lock
 
 # Transient runtime artifacts
 .ai/
+.codex-thread
 
 # macOS
 .DS_Store

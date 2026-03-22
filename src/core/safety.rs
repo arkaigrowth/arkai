@@ -94,7 +94,11 @@ impl SafetyLimits {
     }
 
     /// Validate input against size limits and denylist
-    pub fn validate_input(&self, input: &str, source_path: Option<&Path>) -> Result<(), SafetyViolation> {
+    pub fn validate_input(
+        &self,
+        input: &str,
+        source_path: Option<&Path>,
+    ) -> Result<(), SafetyViolation> {
         // Check size
         let size = input.len() as u64;
         if size > self.max_input_bytes {
@@ -111,6 +115,34 @@ impl SafetyLimits {
                 return Err(SafetyViolation::DenylistMatch {
                     path: path_str.to_string(),
                 });
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate a shell command action against denylisted path patterns.
+    pub fn validate_shell_action(&self, action: &str) -> Result<(), SafetyViolation> {
+        for raw_token in action.split(|c: char| {
+            c.is_whitespace() || matches!(c, '|' | '&' | ';' | '<' | '>' | '(' | ')')
+        }) {
+            for fragment in raw_token.split('=') {
+                let candidate = fragment.trim_matches(|c: char| matches!(c, '"' | '\'' | '`'));
+                if candidate.is_empty() {
+                    continue;
+                }
+
+                for normalized in [
+                    candidate,
+                    candidate.trim_start_matches("./"),
+                    candidate.trim_start_matches("../"),
+                ] {
+                    if !normalized.is_empty() && self.is_denylisted(normalized) {
+                        return Err(SafetyViolation::DenylistMatch {
+                            path: normalized.to_string(),
+                        });
+                    }
+                }
             }
         }
 
@@ -264,6 +296,19 @@ mod tests {
         let long_input = "x".repeat(200);
         let result = limits.validate_input(&long_input, None);
         assert!(matches!(result, Err(SafetyViolation::MaxInputBytes { .. })));
+    }
+
+    #[test]
+    fn test_shell_action_validation() {
+        let limits = SafetyLimits::default();
+
+        assert!(limits.validate_shell_action("cat notes.txt").is_ok());
+
+        let result = limits.validate_shell_action("cat .env");
+        assert!(matches!(
+            result,
+            Err(SafetyViolation::DenylistMatch { path }) if path == ".env"
+        ));
     }
 
     #[test]

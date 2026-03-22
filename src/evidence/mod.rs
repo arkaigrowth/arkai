@@ -38,12 +38,11 @@ pub mod spans;
 pub mod types;
 
 pub use spans::{
-    compute_evidence_id, compute_hash, compute_slice_hash, extract_anchor_text,
-    find_exact_matches, find_nearest_timestamp, find_quote, offset_to_line_col, LineCol,
-    MatchResult, MatchStatus,
+    compute_evidence_id, compute_hash, compute_slice_hash, extract_anchor_text, find_exact_matches,
+    find_nearest_timestamp, find_quote, offset_to_line_col, LineCol, MatchResult, MatchStatus,
 };
 
 pub use types::{
-    Entity, EntityMention, EntitiesFile, Evidence, EvidenceEvent, Resolution, ResolutionMethod,
+    EntitiesFile, Entity, EntityMention, Evidence, EvidenceEvent, Resolution, ResolutionMethod,
     Span, Status, UnresolvedReason,
 };

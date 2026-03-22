@@ -33,9 +33,12 @@ impl EventStore {
         let artifacts_dir = run_dir.join("artifacts");
 
         // Create directory structure including artifacts
-        fs::create_dir_all(&artifacts_dir)
-            .await
-            .with_context(|| format!("Failed to create artifacts directory: {}", artifacts_dir.display()))?;
+        fs::create_dir_all(&artifacts_dir).await.with_context(|| {
+            format!(
+                "Failed to create artifacts directory: {}",
+                artifacts_dir.display()
+            )
+        })?;
 
         let events_path = run_dir.join("events.jsonl");
 
@@ -121,10 +124,7 @@ impl EventStore {
             .open(&self.events_path)
             .await
             .with_context(|| {
-                format!(
-                    "Failed to open events file: {}",
-                    self.events_path.display()
-                )
+                format!("Failed to open events file: {}", self.events_path.display())
             })?;
 
         let json = serde_json::to_string(event).context("Failed to serialize event")?;
@@ -142,9 +142,9 @@ impl EventStore {
             return Ok(Vec::new());
         }
 
-        let file = File::open(&self.events_path)
-            .await
-            .with_context(|| format!("Failed to open events file: {}", self.events_path.display()))?;
+        let file = File::open(&self.events_path).await.with_context(|| {
+            format!("Failed to open events file: {}", self.events_path.display())
+        })?;
 
         let reader = BufReader::new(file);
         let mut lines = reader.lines();
@@ -167,8 +167,7 @@ impl EventStore {
         let events = self.replay().await?;
 
         let completed = events.iter().any(|e| {
-            e.idempotency_key == idempotency_key
-                && matches!(e.event_type, EventType::StepCompleted)
+            e.idempotency_key == idempotency_key && matches!(e.event_type, EventType::StepCompleted)
         });
 
         Ok(completed)
@@ -186,7 +185,10 @@ impl EventStore {
     /// Get the last event of a specific type
     pub async fn last_event_of_type(&self, event_type: EventType) -> Result<Option<Event>> {
         let events = self.replay().await?;
-        Ok(events.into_iter().rev().find(|e| e.event_type == event_type))
+        Ok(events
+            .into_iter()
+            .rev()
+            .find(|e| e.event_type == event_type))
     }
 
     /// List all run IDs in the base directory
@@ -238,6 +240,7 @@ mod hex {
 mod tests {
     use super::*;
     use crate::domain::StepStatus;
+    use serde_json::json;
     use tempfile::TempDir;
 
     // Helper to create a test event store in a temp directory
@@ -318,6 +321,39 @@ mod tests {
         for (i, event) in events.iter().enumerate() {
             assert_eq!(event.step_id, Some(format!("step{}", i)));
         }
+    }
+
+    #[tokio::test]
+    async fn test_event_round_trip_with_extended_fields() {
+        let (store, _temp) = create_test_store().await;
+        let run_id = Uuid::new_v4();
+        let payload = json!({
+            "step": "summarize",
+            "attempt": 1,
+            "metadata": {
+                "source": "test"
+            }
+        });
+        let event = Event::new(
+            run_id,
+            Some("step1".to_string()),
+            EventType::StepStarted,
+            format!("{}:step1:abc", run_id),
+            "Step started".to_string(),
+            StepStatus::Running,
+        )
+        .with_payload(payload.clone())
+        .with_domain_event("pipeline.step.started");
+
+        store.append(&event).await.unwrap();
+
+        let events = store.replay().await.unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].payload, Some(payload));
+        assert_eq!(
+            events[0].domain_event.as_deref(),
+            Some("pipeline.step.started")
+        );
     }
 
     #[tokio::test]

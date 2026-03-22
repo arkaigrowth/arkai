@@ -139,7 +139,11 @@ pub struct LibraryContent {
 
 impl LibraryContent {
     /// Create new library content
-    pub fn new(url: impl Into<String>, title: impl Into<String>, content_type: ContentType) -> Self {
+    pub fn new(
+        url: impl Into<String>,
+        title: impl Into<String>,
+        content_type: ContentType,
+    ) -> Self {
         let url = url.into();
         Self {
             id: ContentId::from_url(&url),
@@ -180,7 +184,10 @@ impl LibraryContent {
     }
 
     /// Find content directory by content ID (searches for folder containing the ID)
-    pub async fn find_content_dir(id: &ContentId, content_type: ContentType) -> Result<Option<PathBuf>> {
+    pub async fn find_content_dir(
+        id: &ContentId,
+        content_type: ContentType,
+    ) -> Result<Option<PathBuf>> {
         let type_dir = config::content_type_dir(content_type)?;
 
         if !type_dir.exists() {
@@ -257,9 +264,9 @@ impl LibraryContent {
             let type_dir = config::content_type_dir(content_type)?;
             let legacy_path = type_dir.join(id.as_str()).join("metadata.json");
             if legacy_path.exists() {
-                let content = fs::read_to_string(&legacy_path)
-                    .await
-                    .with_context(|| format!("Failed to read metadata: {}", legacy_path.display()))?;
+                let content = fs::read_to_string(&legacy_path).await.with_context(|| {
+                    format!("Failed to read metadata: {}", legacy_path.display())
+                })?;
                 return serde_json::from_str(&content).context("Failed to parse metadata JSON");
             }
         }
@@ -402,10 +409,7 @@ mod tests {
         );
         assert_eq!("yt".parse::<ContentType>().unwrap(), ContentType::YouTube);
         assert_eq!("web".parse::<ContentType>().unwrap(), ContentType::Web);
-        assert_eq!(
-            "webpage".parse::<ContentType>().unwrap(),
-            ContentType::Web
-        );
+        assert_eq!("webpage".parse::<ContentType>().unwrap(), ContentType::Web);
         assert!("invalid".parse::<ContentType>().is_err());
     }
 

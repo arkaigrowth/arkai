@@ -86,34 +86,19 @@ fn test_retry_delay_calculation() {
     };
 
     // Attempt 1: initial delay
-    assert_eq!(
-        policy.delay_for_attempt(1),
-        Duration::from_millis(1000)
-    );
+    assert_eq!(policy.delay_for_attempt(1), Duration::from_millis(1000));
 
     // Attempt 2: initial * 2
-    assert_eq!(
-        policy.delay_for_attempt(2),
-        Duration::from_millis(2000)
-    );
+    assert_eq!(policy.delay_for_attempt(2), Duration::from_millis(2000));
 
     // Attempt 3: initial * 4
-    assert_eq!(
-        policy.delay_for_attempt(3),
-        Duration::from_millis(4000)
-    );
+    assert_eq!(policy.delay_for_attempt(3), Duration::from_millis(4000));
 
     // Attempt 4: initial * 8
-    assert_eq!(
-        policy.delay_for_attempt(4),
-        Duration::from_millis(8000)
-    );
+    assert_eq!(policy.delay_for_attempt(4), Duration::from_millis(8000));
 
     // Attempt 5: capped at max
-    assert_eq!(
-        policy.delay_for_attempt(5),
-        Duration::from_millis(10000)
-    );
+    assert_eq!(policy.delay_for_attempt(5), Duration::from_millis(10000));
 }
 
 #[test]

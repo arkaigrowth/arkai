@@ -1,0 +1,54 @@
+# Why You Care content generation pipeline
+# Transforms text/transcripts into memorable content formats
+# Use case: Voice memo → content, notes → social posts
+
+name: why-you-care
+description: Transform input into Cheat Card + Video Script + Social Post
+
+safety_limits:
+  max_steps: 5
+  step_timeout_seconds: 180
+  max_input_bytes: 524288   # 512KB (transcripts can be long)
+  max_output_bytes: 1048576 # 1MB
+
+steps:
+  # Step 1: Generate all three content formats
+  # Using single pattern call for efficiency (avoids 3x LLM overhead)
+  - name: generate-content
+    adapter: fabric
+    action: why_you_care
+    input_from: pipeline_input
+    timeout_seconds: 120
+    retry_policy:
+      max_attempts: 3
+      initial_delay_ms: 2000
+
+# Future enhancement: Split into parallel steps when arkai supports it
+# This would allow generating card/script/post simultaneously:
+#
+# steps:
+#   - name: extract-stakes
+#     adapter: fabric
+#     action: extract_stakes
+#     input_from: pipeline_input
+#
+#   - name: generate-card
+#     adapter: fabric
+#     action: wyc_card_only
+#     input_from:
+#       previous_step: extract-stakes
+#     parallel_group: content-gen
+#
+#   - name: generate-script
+#     adapter: fabric
+#     action: wyc_script_only
+#     input_from:
+#       previous_step: extract-stakes
+#     parallel_group: content-gen
+#
+#   - name: generate-post
+#     adapter: fabric
+#     action: wyc_post_only
+#     input_from:
+#       previous_step: extract-stakes
+#     parallel_group: content-gen

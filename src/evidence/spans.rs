@@ -282,7 +282,9 @@ fn is_timestamp(s: &str) -> bool {
     if parts.len() < 2 || parts.len() > 3 {
         return false;
     }
-    parts.iter().all(|p| p.len() <= 2 && p.chars().all(|c| c.is_ascii_digit()))
+    parts
+        .iter()
+        .all(|p| p.len() <= 2 && p.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// Compute deterministic evidence ID
