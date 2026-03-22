@@ -527,6 +527,107 @@ pub fn get_embedding(store: &Store, item_id: &str) -> Result<Option<Vec<f32>>> {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// Chunk CRUD
+// ─────────────────────────────────────────────────────────────────
+
+/// A chunk row from the database.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkRow {
+    pub id: String,
+    pub item_id: String,
+    pub chunk_index: i64,
+    pub text: String,
+    pub byte_start: i64,
+    pub byte_end: i64,
+    pub word_count: i64,
+}
+
+/// Insert a chunk. Uses INSERT OR REPLACE for idempotency.
+pub fn insert_chunk(
+    store: &Store,
+    id: &str,
+    item_id: &str,
+    chunk_index: i64,
+    text: &str,
+    byte_start: i64,
+    byte_end: i64,
+    word_count: i64,
+    metadata: &str,
+) -> Result<()> {
+    store.conn().execute(
+        "INSERT OR REPLACE INTO chunks (id, item_id, chunk_index, text, byte_start, byte_end, word_count, metadata)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![id, item_id, chunk_index, text, byte_start, byte_end, word_count, metadata],
+    )?;
+    Ok(())
+}
+
+/// Get all chunks for an item, ordered by chunk_index.
+pub fn get_chunks_for_item(store: &Store, item_id: &str) -> Result<Vec<ChunkRow>> {
+    let mut stmt = store.conn().prepare_cached(
+        "SELECT id, item_id, chunk_index, text, byte_start, byte_end, word_count
+         FROM chunks WHERE item_id = ?1 ORDER BY chunk_index",
+    )?;
+
+    let rows = stmt.query_map([item_id], |row| {
+        Ok(ChunkRow {
+            id: row.get(0)?,
+            item_id: row.get(1)?,
+            chunk_index: row.get(2)?,
+            text: row.get(3)?,
+            byte_start: row.get(4)?,
+            byte_end: row.get(5)?,
+            word_count: row.get(6)?,
+        })
+    })?;
+
+    let mut chunks = Vec::new();
+    for row in rows {
+        chunks.push(row?);
+    }
+    Ok(chunks)
+}
+
+/// Count chunks, optionally for a specific item.
+pub fn count_chunks(store: &Store, item_id: Option<&str>) -> Result<i64> {
+    let count = match item_id {
+        Some(id) => store.conn().query_row(
+            "SELECT COUNT(*) FROM chunks WHERE item_id = ?1",
+            [id],
+            |row| row.get(0),
+        )?,
+        None => store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))?,
+    };
+    Ok(count)
+}
+
+/// Store a chunk embedding.
+pub fn store_chunk_embedding(
+    store: &Store,
+    chunk_id: &str,
+    model: &str,
+    dimensions: i32,
+    vector: &[f32],
+) -> Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let blob: Vec<u8> = vector.iter().flat_map(|f| f.to_le_bytes()).collect();
+
+    store.conn().execute(
+        "INSERT INTO chunk_embeddings (chunk_id, model, dimensions, vector, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(chunk_id) DO UPDATE SET
+             model = excluded.model,
+             dimensions = excluded.dimensions,
+             vector = excluded.vector,
+             created_at = excluded.created_at",
+        params![chunk_id, model, dimensions, blob, now],
+    )?;
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Internal row types (avoid exposing rusqlite types)
 // ─────────────────────────────────────────────────────────────────
 
