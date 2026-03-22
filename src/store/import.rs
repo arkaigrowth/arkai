@@ -88,17 +88,27 @@ struct CatalogEntry {
 // Library metadata.json format (deserialization only)
 // ─────────────────────────────────────────────────────────────────
 
-/// metadata.json as written by LibraryContent::save_metadata.
+/// metadata.json — handles both arkai catalog format and Whisper pipeline format.
+///
+/// Arkai format:  { id, title, url, content_type, processed_at, tags }
+/// Whisper format: { id, title, url, source, duration, transcription_model, ... }
 #[derive(Debug, Deserialize)]
 struct LibraryMetadata {
     id: String,
     title: String,
     url: String,
-    content_type: String,
+    /// Arkai catalog format uses "content_type"
+    content_type: Option<String>,
+    /// Whisper pipeline format uses "source" (e.g., "youtube")
+    source: Option<String>,
     #[allow(dead_code)]
     processed_at: Option<String>,
     #[serde(default)]
     tags: Vec<String>,
+    /// Whisper pipeline metadata
+    duration: Option<String>,
+    word_count: Option<u64>,
+    transcription_model: Option<String>,
 }
 
 /// claims.json top-level structure.
@@ -244,7 +254,24 @@ fn import_single_library_dir(store: &Store, dir: &Path, metadata_path: &Path) ->
         }
     }
 
-    let content_type_normalized = normalize_content_type(&meta.content_type);
+    // Resolve content_type from either format
+    let raw_type = meta
+        .content_type
+        .as_deref()
+        .or(meta.source.as_deref())
+        .unwrap_or("other");
+    let content_type_normalized = normalize_content_type(raw_type);
+
+    // Include Whisper pipeline metadata if present
+    if let Some(duration) = &meta.duration {
+        item_metadata["duration"] = serde_json::json!(duration);
+    }
+    if let Some(wc) = meta.word_count {
+        item_metadata["word_count"] = serde_json::json!(wc);
+    }
+    if let Some(model) = &meta.transcription_model {
+        item_metadata["transcription_model"] = serde_json::json!(model);
+    }
 
     let upsert = UpsertItem {
         id: &meta.id,
