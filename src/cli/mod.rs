@@ -105,6 +105,21 @@ pub enum Commands {
     Search {
         /// Search query
         query: String,
+
+        /// Use semantic search (embeddings + FTS5 hybrid)
+        #[arg(short, long)]
+        semantic: bool,
+
+        /// Maximum results to show
+        #[arg(short, long, default_value = "10")]
+        limit: usize,
+    },
+
+    /// Manage the canonical SQLite store
+    #[command(name = "store")]
+    Store {
+        #[command(subcommand)]
+        command: StoreCommands,
     },
 
     /// Show details of a library item
@@ -164,6 +179,31 @@ pub enum IngestType {
     Web,
 }
 
+/// Store management subcommands
+#[derive(Subcommand, Debug)]
+pub enum StoreCommands {
+    /// Initialize the store (runs migrations)
+    Init,
+
+    /// Show store status (schema version, item count, embedding count)
+    Status,
+
+    /// Import existing catalog.json into the store
+    Import {
+        /// Path to catalog.json (defaults to ~/.arkai/catalog.json)
+        #[arg(short, long)]
+        catalog: Option<PathBuf>,
+
+        /// Also scan library directory for metadata
+        #[arg(short, long)]
+        library: bool,
+
+        /// Compute embeddings for imported items
+        #[arg(short, long)]
+        embed: bool,
+    },
+}
+
 impl From<IngestType> for ContentType {
     fn from(t: IngestType) -> Self {
         match t {
@@ -197,7 +237,12 @@ impl Cli {
                 content_type,
                 limit,
             } => list_library(content_type, limit).await,
-            Commands::Search { query } => search_library(&query).await,
+            Commands::Search {
+                query,
+                semantic,
+                limit,
+            } => search_library(&query, semantic, limit).await,
+            Commands::Store { command } => execute_store(command).await,
             Commands::Show { content_id, full } => show_content(&content_id, full).await,
             Commands::Reprocess { content_id } => reprocess_content(&content_id).await,
             Commands::Pattern {
@@ -663,7 +708,12 @@ async fn list_library(content_type: Option<IngestType>, limit: usize) -> Result<
 }
 
 /// Search the library
-async fn search_library(query: &str) -> Result<()> {
+async fn search_library(query: &str, semantic: bool, limit: usize) -> Result<()> {
+    if semantic {
+        return search_semantic(query, limit).await;
+    }
+
+    // Fallback: catalog substring search
     let catalog = Catalog::load().await?;
 
     let results = catalog.search(query);
@@ -691,6 +741,204 @@ async fn search_library(query: &str) -> Result<()> {
         );
     }
 
+    Ok(())
+}
+
+/// Load embedding config pairs from a Store's config table.
+fn load_embedding_pairs(store: &crate::store::Store) -> Result<Vec<(String, String)>> {
+    let keys = [
+        ("embedding_provider", "embedding.provider"),
+        ("embedding_model", "embedding.model"),
+        ("embedding_dimensions", "embedding.dimensions"),
+    ];
+    let mut pairs = Vec::new();
+    for (store_key, config_key) in keys {
+        if let Some(value) = store.get_config(store_key)? {
+            pairs.push((config_key.to_string(), value));
+        }
+    }
+    Ok(pairs)
+}
+
+/// Semantic search using the SQLite store's hybrid FTS5 + vector search.
+async fn search_semantic(query: &str, limit: usize) -> Result<()> {
+    use crate::store::{self, StoreConfig};
+    use crate::store::embedding::{EmbeddingConfig, OllamaProvider, EmbeddingProvider};
+
+    let db_path = StoreConfig::default_path()?;
+    let store = store::Store::open(&db_path)?;
+
+    // Check if store has any items
+    let item_count = store::queries::count_items(&store, None)?;
+    if item_count == 0 {
+        println!("Store is empty. Run 'arkai store import' first to import your library.");
+        return Ok(());
+    }
+
+    // Load embedding config and provider
+    let pairs = load_embedding_pairs(&store)?;
+    let config = EmbeddingConfig::from_store_config(&pairs)
+        .context("Failed to load embedding config. Run 'arkai store init' first.")?;
+    let provider = OllamaProvider::new(config);
+
+    // Embed the query
+    println!("Embedding query...");
+    let query_vec: Vec<f32> = provider.embed(query).await
+        .context("Failed to embed query. Is Ollama running with the right model?")?;
+
+    // Run hybrid search
+    let results = store::search::hybrid_search(store.conn(), &query_vec, query, limit)?;
+
+    if results.is_empty() {
+        println!("No results found for: \"{}\"", query);
+        return Ok(());
+    }
+
+    println!("Found {} result(s) for \"{}\":\n", results.len(), query);
+    println!(
+        "{:<18} {:<7} {:<7} {:<7} {}",
+        "ID", "SCORE", "FTS", "VEC", "TITLE"
+    );
+    println!("{}", "-".repeat(90));
+
+    for r in &results {
+        let fts = r.fts_rank.map(|v| format!("{:.3}", v)).unwrap_or_else(|| "-".into());
+        let vec = r.vector_score.map(|v| format!("{:.3}", v)).unwrap_or_else(|| "-".into());
+        let title = if r.title.len() > 48 {
+            format!("{}...", &r.title[..48])
+        } else {
+            r.title.clone()
+        };
+        println!(
+            "{:<18} {:<7.4} {:<7} {:<7} {}",
+            r.item_id, r.combined_score, fts, vec, title
+        );
+    }
+
+    Ok(())
+}
+
+/// Execute store subcommands.
+async fn execute_store(command: StoreCommands) -> Result<()> {
+    use crate::store::{self, StoreConfig};
+
+    match command {
+        StoreCommands::Init => {
+            let db_path = StoreConfig::default_path()?;
+            let store = store::Store::open(&db_path)?;
+            let version = store.schema_version()?;
+            println!("Store initialized at: {}", db_path.display());
+            println!("Schema version: {}", version);
+            Ok(())
+        }
+        StoreCommands::Status => {
+            let db_path = StoreConfig::default_path()?;
+            if !db_path.exists() {
+                println!("Store not initialized. Run 'arkai store init' first.");
+                return Ok(());
+            }
+            let store = store::Store::open(&db_path)?;
+            let version = store.schema_version()?;
+            let items = store::queries::count_items(&store, None)?;
+            let content = store::queries::count_items(&store, Some("content"))?;
+            let emails = store::queries::count_items(&store, Some("email"))?;
+            let model = store.get_config("embedding_model")?.unwrap_or_default();
+            let dims = store.get_config("embedding_dimensions")?.unwrap_or_default();
+
+            let embed_count: i64 = store.conn().query_row(
+                "SELECT COUNT(*) FROM embeddings", [], |row| row.get(0),
+            )?;
+
+            println!("Store: {}", db_path.display());
+            println!("Schema version: {}", version);
+            println!("Items: {} total ({} content, {} email)", items, content, emails);
+            println!("Embeddings: {} / {} items", embed_count, items);
+            println!("Model: {} ({}d)", model, dims);
+            Ok(())
+        }
+        StoreCommands::Import {
+            catalog,
+            library,
+            embed,
+        } => {
+            let db_path = StoreConfig::default_path()?;
+            let store = store::Store::open(&db_path)?;
+
+            // Import catalog
+            let catalog_path = catalog.unwrap_or_else(|| {
+                dirs::home_dir().unwrap().join(".arkai").join("catalog.json")
+            });
+            if catalog_path.exists() {
+                println!("Importing catalog from: {}", catalog_path.display());
+                let stats = store::import::import_catalog(&store, &catalog_path)?;
+                println!("  {}", stats);
+            } else {
+                println!("No catalog found at: {}", catalog_path.display());
+            }
+
+            // Import library metadata
+            if library {
+                let lib_path = crate::config::config()?.library.clone();
+                if lib_path.exists() {
+                    println!("Scanning library at: {}", lib_path.display());
+                    let stats = store::import::import_library_metadata(&store, &lib_path)?;
+                    println!("  {}", stats);
+                } else {
+                    println!("Library not found at: {}", lib_path.display());
+                }
+            }
+
+            // Compute embeddings
+            if embed {
+                compute_embeddings_for_store(&store).await?;
+            }
+
+            let total = store::queries::count_items(&store, None)?;
+            println!("\nStore now has {} items.", total);
+            Ok(())
+        }
+    }
+}
+
+/// Compute embeddings for all items that don't have one yet.
+async fn compute_embeddings_for_store(store: &crate::store::Store) -> Result<()> {
+    use crate::store::embedding::{EmbeddingConfig, OllamaProvider, EmbeddingProvider};
+    use crate::store::queries;
+
+    let pairs = load_embedding_pairs(store)?;
+    let config = EmbeddingConfig::from_store_config(&pairs)?;
+    let dims = config.dimensions;
+    let model_name = config.model.clone();
+    let provider = OllamaProvider::new(config);
+
+    // Find items without embeddings
+    let items = queries::list_items(store, Some(1000))?;
+    let mut embedded = 0;
+    let mut skipped = 0;
+
+    for item in &items {
+        // Check if embedding exists
+        let has_embedding = queries::get_embedding(store, &item.id)?.is_some();
+        if has_embedding {
+            skipped += 1;
+            continue;
+        }
+
+        // Build text to embed: title + tags
+        let text = format!("{} {}", item.title, item.tags.join(" "));
+        let result: Result<Vec<f32>> = provider.embed(&text).await;
+        match result {
+            Ok(vector) => {
+                queries::store_embedding(store, &item.id, &model_name, dims as i32, &vector)?;
+                embedded += 1;
+                print!("\r  Embedded {}/{} items...", embedded + skipped, items.len());
+            }
+            Err(e) => {
+                eprintln!("\n  Warning: failed to embed '{}': {}", item.title, e);
+            }
+        }
+    }
+    println!("\r  Embedded {} items ({} already had embeddings).", embedded, skipped);
     Ok(())
 }
 
