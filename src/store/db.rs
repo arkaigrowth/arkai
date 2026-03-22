@@ -156,9 +156,9 @@ mod tests {
     fn test_get_set_config() {
         let store = Store::open_memory().unwrap();
 
-        // Read default
+        // Read default (upgraded by migration 002)
         let model = store.get_config("embedding_model").unwrap();
-        assert_eq!(model, Some("nomic-embed-text".to_string()));
+        assert_eq!(model, Some("mxbai-embed-large".to_string()));
 
         // Override
         store.set_config("embedding_model", "text-embedding-3-small").unwrap();
