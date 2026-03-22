@@ -18,6 +18,7 @@
 
 pub mod db;
 pub mod embedding;
+pub mod import;
 pub mod migrations;
 pub mod queries;
 pub mod search;
