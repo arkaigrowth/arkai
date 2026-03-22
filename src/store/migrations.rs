@@ -135,6 +135,17 @@ const MIGRATIONS: &[Migration] = &[
                 ('embedding_provider', 'ollama');
         "#,
     },
+    Migration {
+        version: 2,
+        description: "upgrade default embedding model to mxbai-embed-large (1024 dims)",
+        sql: r#"
+            UPDATE store_config SET value = 'mxbai-embed-large' WHERE key = 'embedding_model';
+            UPDATE store_config SET value = '1024' WHERE key = 'embedding_dimensions';
+
+            -- Clear stale embeddings from old model so they get re-embedded
+            DELETE FROM embeddings WHERE model != 'mxbai-embed-large';
+        "#,
+    },
 ];
 
 /// Ensure the schema_migrations table exists.
@@ -228,7 +239,7 @@ mod tests {
         let conn = memory_db();
 
         let applied1 = run_migrations(&conn).unwrap();
-        assert_eq!(applied1, 1); // one migration exists
+        assert_eq!(applied1, MIGRATIONS.len()); // all migrations applied
 
         let applied2 = run_migrations(&conn).unwrap();
         assert_eq!(applied2, 0); // already applied, nothing new
@@ -251,7 +262,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(count, 1);
+        assert_eq!(count, MIGRATIONS.len() as i64);
     }
 
     #[test]
@@ -308,7 +319,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(model, "nomic-embed-text");
+        assert_eq!(model, "mxbai-embed-large"); // upgraded by migration 002
 
         let dims: String = conn
             .query_row(
@@ -317,6 +328,13 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(dims, "768");
+        assert_eq!(dims, "1024"); // upgraded by migration 002
+    }
+
+    #[test]
+    fn test_schema_version_matches_latest() {
+        let conn = memory_db();
+        run_migrations(&conn).unwrap();
+        assert_eq!(current_version(&conn).unwrap(), 2);
     }
 }
