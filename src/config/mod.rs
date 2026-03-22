@@ -23,16 +23,22 @@ use crate::library::content::ContentType;
 /// Global cached configuration (stores Result to handle init errors)
 static CONFIG: OnceLock<Result<ResolvedConfig, String>> = OnceLock::new();
 
-/// Raw config file schema (matches YAML structure)
+/// Raw config file schema (matches YAML structure).
+/// Uses flatten + Value to tolerate unknown top-level keys (e.g., obsidian, linkedin
+/// config from older sessions) without failing deserialization.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ConfigFile {
-    pub version: String,
+    #[serde(default)]
+    pub version: Option<String>,
     #[serde(default)]
     pub paths: PathsConfig,
     #[serde(default)]
     pub fabric: Option<FabricConfig>,
     #[serde(default)]
     pub safety: Option<SafetyConfig>,
+    /// Catch-all for unknown keys (obsidian, linkedin, etc.)
+    #[serde(flatten)]
+    pub extra: std::collections::HashMap<String, serde_yaml::Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -351,7 +357,7 @@ safety:
         .unwrap();
 
         let config = load_config_file(&config_path).unwrap();
-        assert_eq!(config.version, "1.0");
+        assert_eq!(config.version, Some("1.0".to_string()));
         assert_eq!(config.paths.home, Some("./".to_string()));
         assert_eq!(config.paths.library, Some("../library".to_string()));
         assert_eq!(
