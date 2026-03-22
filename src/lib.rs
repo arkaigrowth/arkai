@@ -38,6 +38,7 @@ pub mod domain;
 pub mod evidence;
 pub mod ingest;
 pub mod library;
+pub mod store;
 
 // Re-export main types at crate root for convenience
 pub use core::Orchestrator;
