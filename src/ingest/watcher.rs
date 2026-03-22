@@ -139,7 +139,9 @@ impl VoiceMemoWatcher {
     /// Scan the directory once and enqueue any existing files
     /// Returns the number of new files queued
     pub async fn scan_once(&self, queue: &VoiceQueue) -> Result<ScanResult> {
-        self.config.validate().map_err(|e| anyhow::anyhow!("{}", e))?;
+        self.config
+            .validate()
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
 
         // Phase 1.6: Check ffprobe availability upfront (fail fast, not silent failures)
         check_ffprobe_available().await?;
@@ -173,7 +175,11 @@ impl VoiceMemoWatcher {
                 if let Ok(age) = mtime.elapsed() {
                     if age < std::time::Duration::from_secs(MIN_FILE_AGE_SECS) {
                         // Phase 1.6: Report deferred files, don't silently skip
-                        tracing::info!("Deferred (too recent, age={:.1}s): {}", age.as_secs_f32(), path.display());
+                        tracing::info!(
+                            "Deferred (too recent, age={:.1}s): {}",
+                            age.as_secs_f32(),
+                            path.display()
+                        );
                         result.deferred += 1;
                         continue;
                     }
@@ -206,7 +212,10 @@ impl VoiceMemoWatcher {
             };
 
             // Enqueue the normalized file
-            match queue.enqueue(&normalized_path, normalized_size, Utc::now()).await {
+            match queue
+                .enqueue(&normalized_path, normalized_size, Utc::now())
+                .await
+            {
                 Ok(enqueue_result) => match enqueue_result {
                     EnqueueResult::Queued(_) => result.new_files += 1,
                     EnqueueResult::AlreadyQueued(_) => result.already_queued += 1,
@@ -229,7 +238,9 @@ impl VoiceMemoWatcher {
         &self,
         queue: Arc<VoiceQueue>,
     ) -> Result<(mpsc::Receiver<AudioFileEvent>, WatchHandle)> {
-        self.config.validate().map_err(|e| anyhow::anyhow!("{}", e))?;
+        self.config
+            .validate()
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
 
         let (event_tx, event_rx) = mpsc::channel::<AudioFileEvent>(100);
         let (stop_tx, mut stop_rx) = mpsc::channel::<()>(1);
@@ -256,7 +267,12 @@ impl VoiceMemoWatcher {
     fn is_audio_file(&self, path: &Path) -> bool {
         path.extension()
             .and_then(|ext| ext.to_str())
-            .map(|ext| self.config.extensions.iter().any(|e| e.eq_ignore_ascii_case(ext)))
+            .map(|ext| {
+                self.config
+                    .extensions
+                    .iter()
+                    .any(|e| e.eq_ignore_ascii_case(ext))
+            })
             .unwrap_or(false)
     }
 }
@@ -367,9 +383,8 @@ impl FileStabilityState {
         let time_since_change = now.duration_since(self.last_changed);
         let age = now.duration_since(self.first_seen);
 
-        time_since_change >= stability_delay
-            && age >= min_age
-            && self.stable_checks >= 3 // Changed from 2 to 3 per Phase 1.6
+        time_since_change >= stability_delay && age >= min_age && self.stable_checks >= 3
+        // Changed from 2 to 3 per Phase 1.6
     }
 
     /// Record a stable check (size/mtime unchanged)
@@ -427,7 +442,9 @@ async fn run_watcher(
         tx,
     )?;
 
-    debouncer.watcher().watch(&config.watch_path, RecursiveMode::NonRecursive)?;
+    debouncer
+        .watcher()
+        .watch(&config.watch_path, RecursiveMode::NonRecursive)?;
 
     let stability_delay = Duration::from_secs(config.stability_delay_secs);
     let min_age = Duration::from_secs(MIN_FILE_AGE_SECS);
@@ -453,9 +470,15 @@ async fn run_watcher(
                     let path = event.path;
 
                     // Only care about audio files
-                    if !path.extension()
+                    if !path
+                        .extension()
                         .and_then(|e| e.to_str())
-                        .map(|e| config.extensions.iter().any(|ext| ext.eq_ignore_ascii_case(e)))
+                        .map(|e| {
+                            config
+                                .extensions
+                                .iter()
+                                .any(|ext| ext.eq_ignore_ascii_case(e))
+                        })
                         .unwrap_or(false)
                     {
                         continue;
@@ -502,7 +525,9 @@ async fn run_watcher(
                     "Quarantined (stuck syncing): {} (deferrals={}, age={:.0}s)",
                     path.display(),
                     state.defer_count,
-                    Instant::now().duration_since(state.first_seen).as_secs_f32()
+                    Instant::now()
+                        .duration_since(state.first_seen)
+                        .as_secs_f32()
                 );
             }
         }
@@ -535,7 +560,10 @@ async fn run_watcher(
             // If this fails, the file is likely still syncing despite passing stability checks
             if is_qta_file(&path) {
                 if !validate_audio_readable(&path).await {
-                    tracing::info!("Deferred (ffprobe failed, still syncing?): {}", path.display());
+                    tracing::info!(
+                        "Deferred (ffprobe failed, still syncing?): {}",
+                        path.display()
+                    );
                     // Reset for retry - don't remove from pending
                     if let Some(state) = pending.get_mut(&path) {
                         state.reset_for_retry();
@@ -577,17 +605,31 @@ async fn run_watcher(
                     };
 
                     // Enqueue the normalized file
-                    match queue.enqueue(&normalized_path, normalized_size, Utc::now()).await {
+                    match queue
+                        .enqueue(&normalized_path, normalized_size, Utc::now())
+                        .await
+                    {
                         Ok(result) => {
                             if result.is_new() {
-                                tracing::info!("New audio file queued: {} ({})", normalized_path.display(), hash);
+                                tracing::info!(
+                                    "New audio file queued: {} ({})",
+                                    normalized_path.display(),
+                                    hash
+                                );
                                 let _ = event_tx.send(audio_event).await;
                             } else {
-                                tracing::debug!("Audio file already in queue: {}", normalized_path.display());
+                                tracing::debug!(
+                                    "Audio file already in queue: {}",
+                                    normalized_path.display()
+                                );
                             }
                         }
                         Err(e) => {
-                            tracing::warn!("Failed to enqueue {}: {}", normalized_path.display(), e);
+                            tracing::warn!(
+                                "Failed to enqueue {}: {}",
+                                normalized_path.display(),
+                                e
+                            );
                         }
                     }
                 }
@@ -634,9 +676,12 @@ async fn check_ffprobe_available() -> Result<()> {
 async fn validate_audio_readable(path: &Path) -> bool {
     let output = tokio::process::Command::new("ffprobe")
         .args([
-            "-v", "quiet",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "-v",
+            "quiet",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
         ])
         .arg(path)
         .output()
@@ -750,7 +795,13 @@ mod tests {
         // Scan again - should be idempotent
         let result2 = watcher.scan_once(&queue).await.unwrap();
 
-        assert_eq!(result2.new_files, 0, "Already processed files shouldn't be re-queued");
-        assert_eq!(result2.already_queued, 2, "Files should show as already queued");
+        assert_eq!(
+            result2.new_files, 0,
+            "Already processed files shouldn't be re-queued"
+        );
+        assert_eq!(
+            result2.already_queued, 2,
+            "Files should show as already queued"
+        );
     }
 }

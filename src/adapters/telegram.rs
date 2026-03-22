@@ -57,10 +57,7 @@ impl TelegramClient {
 
     /// Build API URL
     fn api_url(&self, method: &str) -> String {
-        format!(
-            "https://api.telegram.org/bot{}/{}",
-            self.bot_token, method
-        )
+        format!("https://api.telegram.org/bot{}/{}", self.bot_token, method)
     }
 
     /// Send a text message
@@ -146,10 +143,7 @@ impl TelegramClient {
 
     /// Send a voice message (for .ogg files, but we'll use audio for .m4a)
     pub async fn send_voice_memo(&self, audio_path: &Path) -> Result<i64> {
-        let file_name = audio_path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy();
+        let file_name = audio_path.file_name().unwrap_or_default().to_string_lossy();
 
         // Caption includes source info
         let caption = format!("🎙️ Voice Memo: {}", file_name);

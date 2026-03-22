@@ -4,6 +4,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use uuid::Uuid;
 
 /// A single event in the append-only event log.
@@ -33,6 +34,14 @@ pub struct Event {
     /// Human-readable summary (NO secrets)
     pub payload_summary: String,
 
+    /// Optional structured payload for richer replay and debugging
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<Value>,
+
+    /// Optional domain event name for higher-level event semantics
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_event: Option<String>,
+
     /// Current status of the step/run
     pub status: StepStatus,
 
@@ -61,6 +70,8 @@ impl Event {
             event_type,
             idempotency_key,
             payload_summary,
+            payload: None,
+            domain_event: None,
             status,
             duration_ms: None,
             error: None,
@@ -76,6 +87,18 @@ impl Event {
     /// Create an event with error information
     pub fn with_error(mut self, error: String) -> Self {
         self.error = Some(error);
+        self
+    }
+
+    /// Create an event with a structured payload
+    pub fn with_payload(mut self, payload: Value) -> Self {
+        self.payload = Some(payload);
+        self
+    }
+
+    /// Create an event with a domain event name
+    pub fn with_domain_event(mut self, domain_event: impl Into<String>) -> Self {
+        self.domain_event = Some(domain_event.into());
         self
     }
 }
@@ -111,7 +134,6 @@ pub enum EventType {
     // ─────────────────────────────────────────────────────────────────────────
     // Voice Capture Events (Phase 1)
     // ─────────────────────────────────────────────────────────────────────────
-
     /// Audio file detected in watch directory
     AudioDetected,
 
@@ -195,6 +217,7 @@ impl std::fmt::Display for VoiceQueueStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_event_serialization() {
@@ -212,6 +235,8 @@ mod tests {
 
         assert_eq!(parsed.event_type, EventType::StepStarted);
         assert_eq!(parsed.status, StepStatus::Running);
+        assert_eq!(parsed.payload, None);
+        assert_eq!(parsed.domain_event, None);
     }
 
     #[test]
@@ -242,5 +267,29 @@ mod tests {
         .with_error("Connection timeout".to_string());
 
         assert_eq!(event.error, Some("Connection timeout".to_string()));
+    }
+
+    #[test]
+    fn test_event_deserialization_defaults_missing_extended_fields() {
+        let event = Event::new(
+            Uuid::new_v4(),
+            Some("summarize".to_string()),
+            EventType::StepStarted,
+            "test-key".to_string(),
+            "Starting summarize step".to_string(),
+            StepStatus::Running,
+        )
+        .with_payload(json!({ "input": "hello" }))
+        .with_domain_event("pipeline.step.started");
+
+        let mut legacy_json = serde_json::to_value(event).unwrap();
+        let object = legacy_json.as_object_mut().unwrap();
+        object.remove("payload");
+        object.remove("domain_event");
+
+        let parsed: Event = serde_json::from_value(legacy_json).unwrap();
+
+        assert_eq!(parsed.payload, None);
+        assert_eq!(parsed.domain_event, None);
     }
 }

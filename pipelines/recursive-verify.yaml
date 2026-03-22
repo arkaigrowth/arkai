@@ -1,0 +1,145 @@
+# Recursive Content Decomposition & Verification Pipeline
+#
+# The pipeline you kept remembering but never built.
+# Takes any content (podcast, transcript, article, voice memo) and:
+#   1. Filters for check-worthy statements
+#   2. Extracts atomic claims with verbatim evidence
+#   3. Extracts entities for cross-referencing
+#   4. Looks up claims externally (web search)
+#   5. Detects discrepancies between claims and evidence
+#   6. Generates annotated metacontent
+#
+# This is the "assembled weapon" — the full fact-checking pipeline.
+
+name: recursive-verify
+description: >
+  Recursive content decomposition: ingest → filter → extract → verify → annotate.
+  Produces evidence.jsonl, entities.json, and a verification report.
+
+safety_limits:
+  max_steps: 15
+  step_timeout_seconds: 180
+  max_input_bytes: 1048576   # 1MB (long transcripts)
+  max_output_bytes: 2097152  # 2MB (evidence + report)
+
+steps:
+  # Step 1: Pre-filter for check-worthy statements
+  # Kills 50-70% noise before expensive extraction
+  - name: filter-checkworthy
+    adapter: fabric
+    action: filter_checkworthy
+    input_from: pipeline_input
+    timeout_seconds: 60
+    retry_policy:
+      max_attempts: 2
+      initial_delay_ms: 1000
+
+  # Step 2: Extract atomic claims with verbatim quotes
+  # Each claim grounded to exact byte range in source
+  - name: extract-claims
+    adapter: fabric
+    action: extract_claims
+    input_from:
+      previous_step: filter-checkworthy
+      # Downstream receives checkworthy statements, not raw transcript
+      # The extract_claims pattern will ground each to the ORIGINAL transcript
+      # (passed as context alongside filtered statements)
+      context: pipeline_input
+    timeout_seconds: 120
+    retry_policy:
+      max_attempts: 3
+      initial_delay_ms: 2000
+
+  # Step 3: Extract entities (parallel with claims in future)
+  # People, orgs, concepts mentioned — used for cross-referencing
+  - name: extract-entities
+    adapter: fabric
+    action: extract_entities
+    input_from: pipeline_input
+    timeout_seconds: 90
+    retry_policy:
+      max_attempts: 2
+      initial_delay_ms: 1000
+
+  # Step 4: External evidence lookup
+  # For each high-confidence claim, search for corroboration
+  # Uses web adapter to fetch supporting/contradicting evidence
+  - name: lookup-evidence
+    adapter: __web__
+    action: search_claims
+    input_from:
+      previous_step: extract-claims
+    timeout_seconds: 180
+    retry_policy:
+      max_attempts: 2
+      initial_delay_ms: 3000
+    # Only lookup claims with worthiness >= 0.7
+    filter:
+      min_confidence: 0.7
+
+  # Step 5: Detect discrepancies
+  # Compare extracted claims against external evidence
+  # Flag: confirmed, contradicted, unverifiable, nuanced
+  - name: detect-discrepancies
+    adapter: fabric
+    action: detect_discrepancies
+    input_from:
+      claims: extract-claims
+      evidence: lookup-evidence
+      entities: extract-entities
+    timeout_seconds: 120
+    retry_policy:
+      max_attempts: 2
+      initial_delay_ms: 2000
+
+  # Step 6: Generate verification report
+  # Annotated output with corrections, confidence adjustments, and sources
+  - name: generate-report
+    adapter: fabric
+    action: verification_report
+    input_from:
+      previous_step: detect-discrepancies
+      original: pipeline_input
+    timeout_seconds: 120
+    retry_policy:
+      max_attempts: 2
+      initial_delay_ms: 2000
+
+# Output artifacts:
+#   evidence.jsonl     - Grounded claims with spans and hashes
+#   entities.json      - Extracted entities with mentions
+#   verification.json  - Discrepancy report with external sources
+#   report.md          - Human-readable annotated report
+
+# Pipeline status tracking:
+#   events.jsonl logs each step completion with timing and counts
+
+# ─── FUTURE ENHANCEMENTS ───
+#
+# Phase 2: Parallel execution
+#   Steps 2 and 3 (extract-claims, extract-entities) can run simultaneously
+#   when arkai supports parallel_group
+#
+# Phase 3: RLM-powered recursive chunking
+#   For transcripts > 10K tokens, use RLM to:
+#     - rlm_load_context + rlm_chunk_context (by paragraphs)
+#     - rlm_sub_query_batch to filter/extract per chunk
+#     - rlm_store_result + aggregate
+#   This enables handling 2-hour podcast transcripts
+#
+# Phase 4: Confidence-based adaptive verification (FIRE pattern)
+#   Instead of looking up ALL claims, use adaptive stopping:
+#     - High confidence (>0.9): Quick single-source check
+#     - Medium (0.6-0.9): Multi-source verification
+#     - Low (<0.6): Deep multi-hop search
+#   Reduces search costs by ~7x per FIRE paper
+#
+# Phase 5: Dual-model extraction (Marcus pattern)
+#   Run extract-claims through TWO models (Claude + GPT-4)
+#   Reconcile disagreements — models disagree on ~15-20% of claims
+#   Higher precision for high-stakes content
+#
+# Phase 6: Feedback loop (AFEV pattern)
+#   Route verification failures back to extraction
+#   If a claim can't be verified, re-extract with refined prompt
+#   Iterative convergence on verifiable claims

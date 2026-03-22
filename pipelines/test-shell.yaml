@@ -1,0 +1,14 @@
+name: test-shell
+description: Test pipeline for shell adapter execution
+
+safety_limits:
+  max_steps: 1
+  step_timeout_seconds: 5
+  run_timeout_seconds: 30
+
+steps:
+  - name: echo_input
+    adapter: shell
+    action: cat
+    input_from: pipeline_input
+    timeout_seconds: 5

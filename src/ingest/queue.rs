@@ -324,7 +324,9 @@ impl VoiceQueue {
     /// Mark an item as processing
     pub async fn mark_processing(&self, id: &str) -> Result<(), VoiceQueueError> {
         let items = self.replay().await?;
-        let item = items.get(id).ok_or_else(|| VoiceQueueError::NotFound(id.to_string()))?;
+        let item = items
+            .get(id)
+            .ok_or_else(|| VoiceQueueError::NotFound(id.to_string()))?;
 
         if item.status != VoiceQueueStatus::Pending {
             return Err(VoiceQueueError::InvalidTransition {
@@ -387,11 +389,7 @@ impl VoiceQueue {
         // Get recent items (last 5)
         let mut all_items: Vec<&QueueItem> = items.values().collect();
         all_items.sort_by(|a, b| b.data.detected_at.cmp(&a.data.detected_at));
-        status.recent = all_items
-            .into_iter()
-            .take(5)
-            .cloned()
-            .collect();
+        status.recent = all_items.into_iter().take(5).cloned().collect();
 
         Ok(status)
     }
@@ -480,19 +478,19 @@ pub async fn compute_file_hash(path: &Path) -> Result<String, std::io::Error> {
 pub async fn probe_duration(path: &Path) -> Option<f32> {
     let output = tokio::process::Command::new("ffprobe")
         .args([
-            "-v", "quiet",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "-v",
+            "quiet",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
         ])
         .arg(path)
         .output()
         .await
         .ok()?;
 
-    String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse()
-        .ok()
+    String::from_utf8_lossy(&output.stdout).trim().parse().ok()
 }
 
 /// Normalize audio file if needed (.qta → .m4a)
@@ -525,9 +523,12 @@ pub async fn normalize_audio(input: &Path) -> Result<PathBuf> {
     tracing::info!("Normalizing .qta → .m4a: {}", input.display());
     let status = tokio::process::Command::new("ffmpeg")
         .args([
-            "-i", input.to_str().unwrap_or(""),
-            "-c:a", "aac",
-            "-b:a", "128k",
+            "-i",
+            input.to_str().unwrap_or(""),
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
             "-y", // Overwrite output
         ])
         .arg(&output)
@@ -560,12 +561,11 @@ mod tests {
 
         // Create a test audio file
         let audio_path = temp.path().join("test.m4a");
-        tokio::fs::write(&audio_path, b"fake audio content").await.unwrap();
-
-        let result = queue
-            .enqueue(&audio_path, 18, Utc::now())
+        tokio::fs::write(&audio_path, b"fake audio content")
             .await
             .unwrap();
+
+        let result = queue.enqueue(&audio_path, 18, Utc::now()).await.unwrap();
 
         assert!(result.is_new());
 
@@ -580,7 +580,9 @@ mod tests {
         let (queue, temp) = create_test_queue().await;
 
         let audio_path = temp.path().join("test.m4a");
-        tokio::fs::write(&audio_path, b"fake audio content").await.unwrap();
+        tokio::fs::write(&audio_path, b"fake audio content")
+            .await
+            .unwrap();
 
         // Enqueue twice
         let result1 = queue.enqueue(&audio_path, 18, Utc::now()).await.unwrap();
@@ -600,7 +602,9 @@ mod tests {
         let (queue, temp) = create_test_queue().await;
 
         let audio_path = temp.path().join("test.m4a");
-        tokio::fs::write(&audio_path, b"fake audio content").await.unwrap();
+        tokio::fs::write(&audio_path, b"fake audio content")
+            .await
+            .unwrap();
 
         let result = queue.enqueue(&audio_path, 18, Utc::now()).await.unwrap();
         let id = result.id().to_string();
@@ -621,7 +625,9 @@ mod tests {
         let (queue, temp) = create_test_queue().await;
 
         let audio_path = temp.path().join("test.m4a");
-        tokio::fs::write(&audio_path, b"fake audio content").await.unwrap();
+        tokio::fs::write(&audio_path, b"fake audio content")
+            .await
+            .unwrap();
 
         let result = queue.enqueue(&audio_path, 18, Utc::now()).await.unwrap();
         let id = result.id().to_string();

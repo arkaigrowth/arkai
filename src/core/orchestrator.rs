@@ -4,13 +4,16 @@
 //! and safety limit enforcement.
 
 use std::collections::HashMap;
-use std::time::Instant;
+use std::process::Stdio;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::process::Command;
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
-use crate::adapters::{Adapter, FabricAdapter};
+use crate::adapters::{Adapter, AdapterOutput, FabricAdapter};
 use crate::domain::{Artifact, Event, EventType, Run, StepStatus};
 
 use super::event_store::{generate_idempotency_key, EventStore};
@@ -108,7 +111,12 @@ impl Orchestrator {
 
     /// Resume a previously failed run
     #[instrument(skip(self, pipeline), fields(run_id = %run_id, pipeline = %pipeline.name))]
-    pub async fn resume_run(&self, run_id: Uuid, pipeline: &Pipeline, input: String) -> Result<Run> {
+    pub async fn resume_run(
+        &self,
+        run_id: Uuid,
+        pipeline: &Pipeline,
+        input: String,
+    ) -> Result<Run> {
         info!("Resuming run");
 
         let store = EventStore::open(run_id).await?;
@@ -119,8 +127,7 @@ impl Orchestrator {
         }
 
         // Reconstruct run state
-        let mut run = Run::from_events(&events)
-            .context("Failed to reconstruct run state")?;
+        let mut run = Run::from_events(&events).context("Failed to reconstruct run state")?;
 
         let mut tracker = SafetyTracker::new();
         let mut artifacts: HashMap<String, Artifact> = run.artifacts.clone();
@@ -177,6 +184,103 @@ impl Orchestrator {
         self.complete_run(&store, &mut run).await
     }
 
+    fn validate_step_action(&self, step: &Step, limits: &SafetyLimits) -> Result<()> {
+        if matches!(step.adapter, AdapterType::Shell) {
+            limits.validate_shell_action(&step.action)?;
+        }
+        Ok(())
+    }
+
+    /// Execute a shell command via `/bin/sh -c`.
+    async fn execute_shell_command(
+        &self,
+        action: &str,
+        input: &str,
+        step_timeout: Duration,
+    ) -> Result<AdapterOutput> {
+        let mut child = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(action)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .with_context(|| format!("Failed to spawn shell command '{}'", action))?;
+
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(input.as_bytes())
+                .await
+                .context("Failed to write to shell stdin")?;
+        }
+
+        let mut stdout = child
+            .stdout
+            .take()
+            .context("Failed to capture shell stdout")?;
+        let mut stderr = child
+            .stderr
+            .take()
+            .context("Failed to capture shell stderr")?;
+
+        let stdout_task = tokio::spawn(async move {
+            let mut buffer = Vec::new();
+            stdout.read_to_end(&mut buffer).await.map(|_| buffer)
+        });
+        let stderr_task = tokio::spawn(async move {
+            let mut buffer = Vec::new();
+            stderr.read_to_end(&mut buffer).await.map(|_| buffer)
+        });
+
+        let status = match tokio::time::timeout(step_timeout, child.wait()).await {
+            Ok(status) => status.context("Failed to wait for shell command completion")?,
+            Err(_) => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                stdout_task.abort();
+                stderr_task.abort();
+                anyhow::bail!(
+                    "Shell command '{}' timed out after {:?}",
+                    action,
+                    step_timeout
+                );
+            }
+        };
+
+        let stdout = stdout_task
+            .await
+            .context("Failed to join shell stdout task")?
+            .context("Failed to read shell stdout")?;
+        let stderr = stderr_task
+            .await
+            .context("Failed to join shell stderr task")?
+            .context("Failed to read shell stderr")?;
+
+        let stdout = String::from_utf8(stdout).context("Shell stdout is not valid UTF-8")?;
+        let stderr = String::from_utf8(stderr).context("Shell stderr is not valid UTF-8")?;
+
+        if !status.success() {
+            let exit_code = status.code().unwrap_or(-1);
+            let stderr = stderr.trim();
+            if stderr.is_empty() {
+                anyhow::bail!(
+                    "Shell command '{}' failed with exit code {}",
+                    action,
+                    exit_code
+                );
+            }
+            anyhow::bail!(
+                "Shell command '{}' failed with exit code {}: {}",
+                action,
+                exit_code,
+                stderr
+            );
+        }
+
+        Ok(AdapterOutput::new(stdout))
+    }
+
     /// Execute a step with retry logic
     async fn execute_step_with_retry(
         &self,
@@ -200,6 +304,8 @@ impl Orchestrator {
             // Return a placeholder if we can't find the artifact
             return Ok(Artifact::from_output(step.name.clone(), String::new()));
         }
+
+        self.validate_step_action(step, limits)?;
 
         let mut attempt = 0u32;
 
@@ -225,6 +331,10 @@ impl Orchestrator {
                 AdapterType::Fabric => {
                     self.fabric_adapter
                         .execute(&step.action, input, timeout)
+                        .await
+                }
+                AdapterType::Shell => {
+                    self.execute_shell_command(&step.action, input, timeout)
                         .await
                 }
             };
@@ -354,9 +464,7 @@ impl Orchestrator {
                     )
                 }),
 
-            InputSource::Static { value } => {
-                Ok(serde_json::to_string(value).unwrap_or_default())
-            }
+            InputSource::Static { value } => Ok(serde_json::to_string(value).unwrap_or_default()),
         }
     }
 
@@ -476,5 +584,48 @@ mod tests {
     fn test_orchestrator_creation() {
         let orchestrator = Orchestrator::new();
         assert_eq!(orchestrator.fabric_adapter.name(), "fabric");
+    }
+
+    #[tokio::test]
+    async fn test_execute_shell_command_returns_stdout() {
+        let orchestrator = Orchestrator::new();
+        let output = orchestrator
+            .execute_shell_command("cat", "shell output", Duration::from_secs(1))
+            .await
+            .unwrap();
+
+        assert_eq!(output.content, "shell output");
+    }
+
+    #[tokio::test]
+    async fn test_execute_shell_command_reports_stderr() {
+        let orchestrator = Orchestrator::new();
+        let error = orchestrator
+            .execute_shell_command("printf 'boom\\n' >&2; exit 7", "", Duration::from_secs(1))
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("boom"));
+        assert!(error.to_string().contains("exit code 7"));
+    }
+
+    #[test]
+    fn test_validate_step_action_rejects_denylisted_shell_command() {
+        let orchestrator = Orchestrator::new();
+        let step = Step {
+            name: "read-env".to_string(),
+            adapter: AdapterType::Shell,
+            action: "cat .env".to_string(),
+            input_from: InputSource::default(),
+            retry_policy: crate::core::RetryPolicy::default(),
+            timeout_seconds: Some(1),
+        };
+
+        let error = orchestrator
+            .validate_step_action(&step, &SafetyLimits::default())
+            .unwrap_err();
+
+        assert!(error.to_string().contains(".env"));
+        assert!(error.to_string().contains("denylist"));
     }
 }

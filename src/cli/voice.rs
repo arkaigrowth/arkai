@@ -93,8 +93,20 @@ pub async fn execute(command: VoiceCommands) -> Result<()> {
         VoiceCommands::Status => execute_status().await,
         VoiceCommands::Scan { path } => execute_scan(path).await,
         VoiceCommands::Watch { once, path } => execute_watch(once, path).await,
-        VoiceCommands::Process { once, route, model, bot_token, chat_id, limit, max_hours, dry_run } => {
-            execute_process(once, &route, &model, bot_token, chat_id, limit, max_hours, dry_run).await
+        VoiceCommands::Process {
+            once,
+            route,
+            model,
+            bot_token,
+            chat_id,
+            limit,
+            max_hours,
+            dry_run,
+        } => {
+            execute_process(
+                once, &route, &model, bot_token, chat_id, limit, max_hours, dry_run,
+            )
+            .await
         }
         VoiceCommands::List { status, limit } => execute_list(status, limit).await,
         VoiceCommands::Config => execute_config().await,
@@ -113,10 +125,7 @@ async fn execute_status() -> Result<()> {
     println!("══════════════════════════════════════════════════════════════");
     println!();
     println!("Watch path:  {}", config.watch_path.display());
-    println!(
-        "Queue file:  {}",
-        VoiceQueue::default_path()?.display()
-    );
+    println!("Queue file:  {}", VoiceQueue::default_path()?.display());
     println!();
     println!("Queue:");
     println!("  Pending:    {}", status.pending);
@@ -280,7 +289,11 @@ async fn execute_process(
     dry_run: bool,
 ) -> Result<()> {
     let queue = VoiceQueue::open_default().await?;
-    let caps = ProcessCaps { limit, max_hours, dry_run };
+    let caps = ProcessCaps {
+        limit,
+        max_hours,
+        dry_run,
+    };
 
     // Handle dry-run mode
     if dry_run {
@@ -289,7 +302,9 @@ async fn execute_process(
 
     match route {
         "telegram" => execute_process_telegram(once, bot_token, chat_id, &queue, &caps).await,
-        "clawdbot" => execute_process_clawdbot(once, model, chat_id.as_deref(), &queue, &caps).await,
+        "clawdbot" => {
+            execute_process_clawdbot(once, model, chat_id.as_deref(), &queue, &caps).await
+        }
         _ => anyhow::bail!("Unknown route: {}. Use 'telegram' or 'clawdbot'", route),
     }
 }
@@ -307,7 +322,10 @@ async fn execute_dry_run(queue: &VoiceQueue, caps: &ProcessCaps) -> Result<()> {
     println!("Dry Run - Would process:");
     println!("══════════════════════════════════════════════════════════════");
     println!();
-    println!("{:<14} {:<30} {:<6} {:<10} {:<12}", "ID", "FILE", "EXT", "DURATION", "SIZE");
+    println!(
+        "{:<14} {:<30} {:<6} {:<10} {:<12}",
+        "ID", "FILE", "EXT", "DURATION", "SIZE"
+    );
     println!("{}", "-".repeat(75));
 
     let mut count = 0u32;
@@ -371,7 +389,11 @@ async fn execute_dry_run(queue: &VoiceQueue, caps: &ProcessCaps) -> Result<()> {
     println!();
     println!("Summary:");
     println!("  Items:    {}", count);
-    println!("  Duration: {:.1} minutes ({:.2} hours)", total_duration / 60.0, total_duration / 3600.0);
+    println!(
+        "  Duration: {:.1} minutes ({:.2} hours)",
+        total_duration / 60.0,
+        total_duration / 3600.0
+    );
     println!("  Size:     {}", format_size(total_size));
 
     if caps.limit.is_some() || caps.max_hours.is_some() {
@@ -388,7 +410,10 @@ async fn execute_dry_run(queue: &VoiceQueue, caps: &ProcessCaps) -> Result<()> {
     let remaining = pending.len() - count as usize;
     if remaining > 0 {
         println!();
-        println!("Note: {} more item(s) would not be processed due to caps", remaining);
+        println!(
+            "Note: {} more item(s) would not be processed due to caps",
+            remaining
+        );
     }
 
     println!();
@@ -468,16 +493,16 @@ async fn execute_process_telegram(
             let item_duration = item.data.duration_seconds.unwrap_or(0.0);
             if let Some(max_hours) = caps.max_hours {
                 if total_duration / 3600.0 >= max_hours {
-                    println!("⛔ Reached --max-hours {} cap ({:.1} min processed)", max_hours, total_duration / 60.0);
+                    println!(
+                        "⛔ Reached --max-hours {} cap ({:.1} min processed)",
+                        max_hours,
+                        total_duration / 60.0
+                    );
                     return Ok(());
                 }
             }
 
-            println!(
-                "📤 Sending: {} ({})",
-                item.data.file_name,
-                &item.id[..8]
-            );
+            println!("📤 Sending: {} ({})", item.data.file_name, &item.id[..8]);
 
             queue.mark_processing(&item.id).await?;
 
@@ -569,7 +594,11 @@ async fn execute_process_clawdbot(
             let item_duration = item.data.duration_seconds.unwrap_or(0.0);
             if let Some(max_hours) = caps.max_hours {
                 if total_duration / 3600.0 >= max_hours {
-                    println!("⛔ Reached --max-hours {} cap ({:.1} min processed)", max_hours, total_duration / 60.0);
+                    println!(
+                        "⛔ Reached --max-hours {} cap ({:.1} min processed)",
+                        max_hours,
+                        total_duration / 60.0
+                    );
                     return Ok(());
                 }
             }
@@ -588,12 +617,18 @@ async fn execute_process_clawdbot(
 
             let transcript = match transcribe(&audio_path, model).await {
                 Ok(t) => {
-                    println!("   ✅ Transcribed ({:.0}s, {} chars)", t.duration_seconds, t.text.len());
+                    println!(
+                        "   ✅ Transcribed ({:.0}s, {} chars)",
+                        t.duration_seconds,
+                        t.text.len()
+                    );
                     t
                 }
                 Err(e) => {
                     println!("   ❌ Transcription failed: {}", e);
-                    queue.mark_failed(&item.id, &format!("Transcription failed: {}", e)).await?;
+                    queue
+                        .mark_failed(&item.id, &format!("Transcription failed: {}", e))
+                        .await?;
                     if once {
                         return Ok(());
                     }
@@ -621,7 +656,9 @@ async fn execute_process_clawdbot(
                 }
                 Err(e) => {
                     println!("   ❌ Failed to send: {}", e);
-                    queue.mark_failed(&item.id, &format!("Clawdbot send failed: {}", e)).await?;
+                    queue
+                        .mark_failed(&item.id, &format!("Clawdbot send failed: {}", e))
+                        .await?;
                 }
             }
 
@@ -668,7 +705,10 @@ async fn execute_list(status_filter: Option<String>, limit: usize) -> Result<()>
     }
 
     println!();
-    println!("{:<14} {:<8} {:<30} {:<20}", "ID", "STATUS", "FILE", "DETECTED");
+    println!(
+        "{:<14} {:<8} {:<30} {:<20}",
+        "ID", "STATUS", "FILE", "DETECTED"
+    );
     println!("{}", "-".repeat(75));
 
     for item in filtered.iter().take(limit) {
@@ -710,7 +750,10 @@ async fn execute_config() -> Result<()> {
     println!("Stability delay:  {} seconds", config.stability_delay_secs);
     println!("Extensions:       {:?}", config.extensions);
     println!();
-    println!("Queue file:       {}", VoiceQueue::default_path()?.display());
+    println!(
+        "Queue file:       {}",
+        VoiceQueue::default_path()?.display()
+    );
     println!();
 
     // Check if path exists
@@ -721,7 +764,12 @@ async fn execute_config() -> Result<()> {
         let mut count = 0;
         let mut entries = tokio::fs::read_dir(&config.watch_path).await?;
         while let Some(entry) = entries.next_entry().await? {
-            if entry.path().extension().map(|e| e == "m4a").unwrap_or(false) {
+            if entry
+                .path()
+                .extension()
+                .map(|e| e == "m4a")
+                .unwrap_or(false)
+            {
                 count += 1;
             }
         }

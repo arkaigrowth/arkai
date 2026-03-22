@@ -1,6 +1,7 @@
 //! Evidence CLI subcommands for inspecting and validating evidence.
 //!
 //! Provides commands to:
+//! - `ground`: Ground claims.json against transcript → evidence.jsonl
 //! - `show`: Display evidence details with source snippet
 //! - `open`: Open the evidence location in VS Code
 //! - `validate`: Verify evidence integrity against transcripts
@@ -18,13 +19,21 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
 use crate::evidence::{
-    compute_slice_hash, offset_to_line_col, Evidence, EvidenceEvent,
+    compute_evidence_id, compute_hash, compute_slice_hash, extract_anchor_text,
+    find_nearest_timestamp, find_quote, offset_to_line_col, Evidence, EvidenceEvent, MatchStatus,
+    Span, Status,
 };
 use crate::library::{ContentId, ContentType, LibraryContent};
 
 /// Evidence-related subcommands
 #[derive(Subcommand, Debug)]
 pub enum EvidenceCommands {
+    /// Ground claims.json against a transcript to produce evidence.jsonl
+    Ground {
+        /// Path to the content directory (containing claims.json and Whisper JSON)
+        content_dir: PathBuf,
+    },
+
     /// Show details of an evidence entry
     Show {
         /// Evidence ID to display
@@ -42,6 +51,40 @@ pub enum EvidenceCommands {
         /// Content ID to validate
         content_id: String,
     },
+}
+
+/// Claims file format from fabric extract_claims
+#[derive(Debug, Deserialize)]
+struct ClaimsFile {
+    claims: Vec<Claim>,
+}
+
+/// A single claim from extract_claims
+#[derive(Debug, Deserialize)]
+struct Claim {
+    claim: String,
+    quote: String,
+    #[serde(default = "default_confidence")]
+    confidence: f64,
+}
+
+fn default_confidence() -> f64 {
+    0.5
+}
+
+/// Whisper JSON output format
+#[derive(Debug, Deserialize)]
+struct WhisperOutput {
+    text: String,
+}
+
+/// Content metadata for grounding
+#[derive(Debug, Deserialize)]
+struct ContentMetadata {
+    id: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    title: Option<String>,
 }
 
 /// Metadata with artifact_digests for fast-path validation
@@ -70,8 +113,8 @@ async fn find_content_directory(content_id: &str) -> Result<PathBuf> {
                 let name = entry.file_name();
                 let name_str = name.to_string_lossy();
 
-                // Match by content_id prefix in folder name
-                if name_str.contains(&format!("({})", &content_id[..content_id.len().min(8)]))
+                // Match by content_id in folder name parentheses, or by prefix
+                if name_str.contains(&format!("({}", &content_id[..content_id.len().min(8)]))
                     || name_str.starts_with(&content_id[..content_id.len().min(16)])
                 {
                     return Ok(entry.path());
@@ -171,6 +214,237 @@ fn append_event(events_path: &PathBuf, event: &EvidenceEvent) -> Result<()> {
     file.flush().context("Failed to flush event")?;
 
     // Lock is released when file is dropped
+    Ok(())
+}
+
+/// Execute the `evidence ground` command
+///
+/// Reads claims.json and a Whisper JSON transcript from content_dir,
+/// finds each quote in the transcript text, computes SHA256 spans,
+/// and writes evidence.jsonl.
+pub async fn execute_ground(content_dir: &PathBuf) -> Result<()> {
+    println!("Grounding claims for: {}", content_dir.display());
+
+    // Load metadata.json to get content_id
+    let metadata_path = content_dir.join("metadata.json");
+    let metadata: ContentMetadata = {
+        let content = tokio::fs::read_to_string(&metadata_path)
+            .await
+            .with_context(|| {
+                format!("Failed to read metadata.json in {}", content_dir.display())
+            })?;
+        serde_json::from_str(&content).context("Failed to parse metadata.json")?
+    };
+    let content_id = &metadata.id;
+    println!("Content ID: {}", content_id);
+
+    // Load claims.json
+    let claims_path = content_dir.join("claims.json");
+    let claims_file: ClaimsFile = {
+        let content = tokio::fs::read_to_string(&claims_path)
+            .await
+            .with_context(|| format!("Failed to read claims.json in {}", content_dir.display()))?;
+        serde_json::from_str(&content).context("Failed to parse claims.json")?
+    };
+    println!("Claims loaded: {}", claims_file.claims.len());
+
+    // Find the Whisper JSON transcript (*.json that isn't metadata.json or claims.json)
+    let mut transcript_text = None;
+    let mut _whisper_filename = None;
+    let mut entries = tokio::fs::read_dir(content_dir).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy().to_string();
+        if name_str.ends_with(".json")
+            && name_str != "metadata.json"
+            && name_str != "claims.json"
+            && name_str != "entities.json"
+        {
+            let content = tokio::fs::read_to_string(entry.path()).await?;
+            if let Ok(whisper) = serde_json::from_str::<WhisperOutput>(&content) {
+                transcript_text = Some(whisper.text);
+                _whisper_filename = Some(name_str);
+                break;
+            }
+        }
+    }
+
+    let transcript = transcript_text.ok_or_else(|| {
+        anyhow::anyhow!(
+            "No Whisper JSON transcript found in {}",
+            content_dir.display()
+        )
+    })?;
+
+    // Write transcript.txt if it doesn't exist (artifact for evidence spans)
+    let transcript_artifact = "transcript.txt";
+    let transcript_path = content_dir.join(transcript_artifact);
+    if !transcript_path.exists() {
+        tokio::fs::write(&transcript_path, &transcript).await?;
+        println!(
+            "Created {} ({} bytes)",
+            transcript_artifact,
+            transcript.len()
+        );
+    } else {
+        println!(
+            "Using existing {} ({} bytes)",
+            transcript_artifact,
+            transcript.len()
+        );
+    }
+
+    // Ground each claim against the transcript
+    let evidence_path = content_dir.join("evidence.jsonl");
+    let events_path = content_dir.join("events.jsonl");
+    let extractor = "extract_claims";
+    let ts = Utc::now().to_rfc3339();
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&evidence_path)
+        .with_context(|| format!("Failed to open evidence.jsonl for writing"))?;
+
+    let mut resolved_count = 0;
+    let mut ambiguous_count = 0;
+    let mut unresolved_count = 0;
+
+    for claim in &claims_file.claims {
+        let quote_sha256 = compute_hash(claim.quote.as_bytes());
+        let match_result = find_quote(&transcript, &claim.quote);
+
+        let evidence = match match_result.status() {
+            MatchStatus::Resolved => {
+                let (start, end) = match_result.selected_match().unwrap();
+                let slice_sha256 = compute_slice_hash(transcript.as_bytes(), start, end);
+                let anchor = extract_anchor_text(&transcript, start, end, 80);
+                let video_ts = find_nearest_timestamp(&transcript, start);
+                let id =
+                    compute_evidence_id(content_id, extractor, &quote_sha256, Some((start, end)));
+
+                resolved_count += 1;
+                Evidence::new_resolved(
+                    id,
+                    content_id.clone(),
+                    claim.claim.clone(),
+                    claim.quote.clone(),
+                    quote_sha256,
+                    Span {
+                        artifact: transcript_artifact.to_string(),
+                        utf8_byte_offset: [start, end],
+                        slice_sha256,
+                        anchor_text: Some(anchor),
+                        video_timestamp: video_ts,
+                    },
+                    claim.confidence,
+                    extractor.to_string(),
+                    ts.clone(),
+                )
+            }
+            MatchStatus::Ambiguous => {
+                let (start, end) = match_result.selected_match().unwrap();
+                let (match_count, _) = match_result.match_info();
+                let slice_sha256 = compute_slice_hash(transcript.as_bytes(), start, end);
+                let anchor = extract_anchor_text(&transcript, start, end, 80);
+                let video_ts = find_nearest_timestamp(&transcript, start);
+                let id =
+                    compute_evidence_id(content_id, extractor, &quote_sha256, Some((start, end)));
+
+                ambiguous_count += 1;
+                Evidence::new_ambiguous(
+                    id,
+                    content_id.clone(),
+                    claim.claim.clone(),
+                    claim.quote.clone(),
+                    quote_sha256,
+                    Span {
+                        artifact: transcript_artifact.to_string(),
+                        utf8_byte_offset: [start, end],
+                        slice_sha256,
+                        anchor_text: Some(anchor),
+                        video_timestamp: video_ts,
+                    },
+                    match_count,
+                    claim.confidence,
+                    extractor.to_string(),
+                    ts.clone(),
+                )
+            }
+            MatchStatus::Unresolved => {
+                let id = compute_evidence_id(content_id, extractor, &quote_sha256, None);
+
+                unresolved_count += 1;
+                Evidence::new_unresolved(
+                    id,
+                    content_id.clone(),
+                    claim.claim.clone(),
+                    claim.quote.clone(),
+                    quote_sha256,
+                    match_result.normalized_hint,
+                    claim.confidence,
+                    extractor.to_string(),
+                    ts.clone(),
+                )
+            }
+        };
+
+        // Write evidence line
+        let json = serde_json::to_string(&evidence).context("Failed to serialize evidence")?;
+        writeln!(file, "{}", json)?;
+
+        // Emit append event
+        let event = EvidenceEvent::EvidenceAppended {
+            content_id: content_id.clone(),
+            evidence_id: evidence.id.clone(),
+            status: evidence.status,
+            extractor: extractor.to_string(),
+        };
+        append_event(&events_path, &event)?;
+    }
+
+    file.flush()?;
+
+    // Print summary
+    println!();
+    println!("Grounding complete:");
+    println!("  Total claims: {}", claims_file.claims.len());
+    println!("  Resolved:     {} (exact match)", resolved_count);
+    println!(
+        "  Ambiguous:    {} (multiple matches, first selected)",
+        ambiguous_count
+    );
+    println!("  Unresolved:   {} (no exact match)", unresolved_count);
+    println!();
+    println!("Evidence written to: {}", evidence_path.display());
+
+    if unresolved_count > 0 {
+        println!();
+        println!("Unresolved claims (quote not found verbatim in transcript):");
+        // Re-read to list unresolved
+        let evidence_list = load_all_evidence(&evidence_path)?;
+        for ev in &evidence_list {
+            if ev.status == Status::Unresolved {
+                let hint = if ev.resolution.reason
+                    == Some(crate::evidence::UnresolvedReason::NormalizedMatchOnly)
+                {
+                    " (whitespace mismatch)"
+                } else {
+                    ""
+                };
+                println!(
+                    "  - \"{}\"{}",
+                    if ev.quote.len() > 60 {
+                        format!("{}...", &ev.quote[..57])
+                    } else {
+                        ev.quote.clone()
+                    },
+                    hint
+                );
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -425,7 +699,10 @@ pub async fn execute_validate(content_id: &str) -> Result<()> {
 
         if !artifact_path.exists() {
             println!("  Status: MISSING");
-            println!("  Evidence count: {} (all marked artifact_missing)", evidence_group.len());
+            println!(
+                "  Evidence count: {} (all marked artifact_missing)",
+                evidence_group.len()
+            );
             artifact_missing_count += evidence_group.len();
 
             // Emit event for missing artifact
@@ -499,7 +776,9 @@ pub async fn execute_validate(content_id: &str) -> Result<()> {
                         stale += 1;
                         println!(
                             "    STALE: {} (offset {} out of bounds, file size {})",
-                            evidence.id, end, transcript_bytes.len()
+                            evidence.id,
+                            end,
+                            transcript_bytes.len()
                         );
                     }
                 }

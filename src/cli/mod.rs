@@ -181,58 +181,33 @@ impl Cli {
                 pipeline_name,
                 input,
                 stdin,
-            } => {
-                run_pipeline(&pipeline_name, input, stdin).await
-            }
-            Commands::Status { run_id } => {
-                show_status(&run_id).await
-            }
-            Commands::Runs { limit } => {
-                list_runs(limit).await
-            }
-            Commands::Resume { run_id } => {
-                resume_run(&run_id).await
-            }
-            Commands::Serve { address } => {
-                serve(&address).await
-            }
+            } => run_pipeline(&pipeline_name, input, stdin).await,
+            Commands::Status { run_id } => show_status(&run_id).await,
+            Commands::Runs { limit } => list_runs(limit).await,
+            Commands::Resume { run_id } => resume_run(&run_id).await,
+            Commands::Serve { address } => serve(&address).await,
             Commands::Ingest {
                 url,
                 content_type,
                 tags,
                 title,
-            } => {
-                ingest_content(&url, content_type, tags, title).await
-            }
-            Commands::Config => {
-                show_config().await
-            }
-            Commands::Library { content_type, limit } => {
-                list_library(content_type, limit).await
-            }
-            Commands::Search { query } => {
-                search_library(&query).await
-            }
-            Commands::Show { content_id, full } => {
-                show_content(&content_id, full).await
-            }
-            Commands::Reprocess { content_id } => {
-                reprocess_content(&content_id).await
-            }
+            } => ingest_content(&url, content_type, tags, title).await,
+            Commands::Config => show_config().await,
+            Commands::Library {
+                content_type,
+                limit,
+            } => list_library(content_type, limit).await,
+            Commands::Search { query } => search_library(&query).await,
+            Commands::Show { content_id, full } => show_content(&content_id, full).await,
+            Commands::Reprocess { content_id } => reprocess_content(&content_id).await,
             Commands::Pattern {
                 pattern_name,
                 input,
                 save,
                 tags,
-            } => {
-                run_pattern(&pattern_name, input, save, tags).await
-            }
-            Commands::Evidence { command } => {
-                execute_evidence(command).await
-            }
-            Commands::Voice { command } => {
-                voice::execute(command).await
-            }
+            } => run_pattern(&pattern_name, input, save, tags).await,
+            Commands::Evidence { command } => execute_evidence(command).await,
+            Commands::Voice { command } => voice::execute(command).await,
         }
     }
 }
@@ -240,6 +215,9 @@ impl Cli {
 /// Execute evidence subcommands
 async fn execute_evidence(command: evidence::EvidenceCommands) -> Result<()> {
     match command {
+        evidence::EvidenceCommands::Ground { content_dir } => {
+            evidence::execute_ground(&content_dir).await
+        }
         evidence::EvidenceCommands::Show { evidence_id } => {
             evidence::execute_show(&evidence_id).await
         }
@@ -300,7 +278,10 @@ async fn run_pipeline(
             std::process::exit(1);
         }
         crate::domain::RunState::SafetyLimitReached { limit } => {
-            eprintln!("\n[Run {} stopped: safety limit reached - {}]", run.id, limit);
+            eprintln!(
+                "\n[Run {} stopped: safety limit reached - {}]",
+                run.id, limit
+            );
             std::process::exit(1);
         }
         _ => {
@@ -313,8 +294,8 @@ async fn run_pipeline(
 
 /// Show the status of a run
 async fn show_status(run_id_str: &str) -> Result<()> {
-    let run_id = Uuid::parse_str(run_id_str)
-        .with_context(|| format!("Invalid run ID: {}", run_id_str))?;
+    let run_id =
+        Uuid::parse_str(run_id_str).with_context(|| format!("Invalid run ID: {}", run_id_str))?;
 
     let orchestrator = Orchestrator::new();
     let run = orchestrator.get_run_status(run_id).await?;
@@ -364,8 +345,8 @@ async fn list_runs(limit: usize) -> Result<()> {
 
 /// Resume a failed run
 async fn resume_run(run_id_str: &str) -> Result<()> {
-    let run_id = Uuid::parse_str(run_id_str)
-        .with_context(|| format!("Invalid run ID: {}", run_id_str))?;
+    let run_id =
+        Uuid::parse_str(run_id_str).with_context(|| format!("Invalid run ID: {}", run_id_str))?;
 
     // First get the run to find out which pipeline and input
     let orchestrator = Orchestrator::new();
@@ -576,7 +557,9 @@ async fn ingest_content(
 
     // Run the pipeline with URL as input
     let orchestrator = Orchestrator::new();
-    let run = orchestrator.run_pipeline(&pipeline, url.to_string()).await?;
+    let run = orchestrator
+        .run_pipeline(&pipeline, url.to_string())
+        .await?;
 
     match &run.state {
         crate::domain::RunState::Completed => {
@@ -597,8 +580,7 @@ async fn ingest_content(
 
             // Update catalog
             let mut catalog = Catalog::load().await?;
-            let mut item = CatalogItem::new(url, &final_title, ct)
-                .with_run_id(run.id.to_string());
+            let mut item = CatalogItem::new(url, &final_title, ct).with_run_id(run.id.to_string());
 
             // Add tags
             if let Some(tags_str) = tags {
@@ -784,18 +766,36 @@ async fn show_config() -> Result<()> {
     println!("  ArkAI Configuration");
     println!("╚══════════════════════════════════════════════════════════════╝");
     println!();
-    println!("Config file: {}", cfg.config_file.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "(none - using defaults)".to_string()));
+    println!(
+        "Config file: {}",
+        cfg.config_file
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(none - using defaults)".to_string())
+    );
     println!();
     println!("Paths:");
     println!("  Home (engine state): {}", cfg.home.display());
     println!("  Library (content):   {}", cfg.library.display());
     println!("  Runs:                {}", cfg.home.join("runs").display());
-    println!("  Catalog:             {}", cfg.home.join("catalog.json").display());
+    println!(
+        "  Catalog:             {}",
+        cfg.home.join("catalog.json").display()
+    );
     println!();
     println!("Content type directories:");
-    println!("  YouTube:  {}", config::content_type_dir(ContentType::YouTube)?.display());
-    println!("  Web:      {}", config::content_type_dir(ContentType::Web)?.display());
-    println!("  Other:    {}", config::content_type_dir(ContentType::Other)?.display());
+    println!(
+        "  YouTube:  {}",
+        config::content_type_dir(ContentType::YouTube)?.display()
+    );
+    println!(
+        "  Web:      {}",
+        config::content_type_dir(ContentType::Web)?.display()
+    );
+    println!(
+        "  Other:    {}",
+        config::content_type_dir(ContentType::Other)?.display()
+    );
     println!();
     println!("Content type mappings:");
     if cfg.content_types.is_empty() {
@@ -809,7 +809,10 @@ async fn show_config() -> Result<()> {
     println!("Safety limits:");
     println!("  Max steps:      {}", cfg.safety.max_steps);
     println!("  Timeout:        {}s", cfg.safety.timeout_seconds);
-    println!("  Max input size: {} bytes", cfg.safety.max_input_size_bytes);
+    println!(
+        "  Max input size: {} bytes",
+        cfg.safety.max_input_size_bytes
+    );
 
     Ok(())
 }
