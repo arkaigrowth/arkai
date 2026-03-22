@@ -17,6 +17,10 @@ pub struct HybridSearchResult {
     pub fts_rank: Option<f64>,
     pub vector_score: Option<f64>,
     pub combined_score: f64,
+    /// Best matching chunk snippet (if result came from chunk-level search).
+    pub chunk_text: Option<String>,
+    /// Chunk ID (if result came from chunk-level search).
+    pub chunk_id: Option<String>,
 }
 
 /// Reciprocal Rank Fusion constant. Standard value from the original RRF paper.
@@ -68,6 +72,8 @@ pub fn vector_search(
                 fts_rank: None,
                 vector_score: Some(score),
                 combined_score: score,
+                chunk_text: None,
+                chunk_id: None,
             }
         })
         .collect();
@@ -206,6 +212,8 @@ fn merge_rrf(
             fts_rank,
             vector_score,
             combined_score: rrf_sum,
+            chunk_text: None,
+            chunk_id: None,
         })
         .collect();
 
@@ -215,6 +223,68 @@ fn merge_rrf(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     results.truncate(limit);
+    Ok(results)
+}
+
+// ---------------------------------------------------------------------------
+// Chunk-level vector search
+// ---------------------------------------------------------------------------
+
+/// Scan all chunk embeddings, compute cosine similarity, return top `limit`
+/// results with chunk text and parent item info.
+pub fn chunk_vector_search(
+    conn: &Connection,
+    query_embedding: &[f32],
+    limit: usize,
+) -> Result<Vec<HybridSearchResult>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT ce.chunk_id, c.item_id, c.text, ce.vector
+             FROM chunk_embeddings ce
+             JOIN chunks c ON c.id = ce.chunk_id",
+        )
+        .context("preparing chunk embedding scan statement")?;
+
+    let rows = stmt
+        .query_map([], |row| {
+            let chunk_id: String = row.get(0)?;
+            let item_id: String = row.get(1)?;
+            let chunk_text: String = row.get(2)?;
+            let blob: Vec<u8> = row.get(3)?;
+            Ok((chunk_id, item_id, chunk_text, blob))
+        })
+        .context("scanning chunk embeddings")?;
+
+    let mut scored: Vec<(String, String, String, f64)> = Vec::new();
+    for row in rows {
+        let (chunk_id, item_id, chunk_text, blob) = row?;
+        let vector: Vec<f32> = blob
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        let sim = cosine_similarity(query_embedding, &vector) as f64;
+        scored.push((chunk_id, item_id, chunk_text, sim));
+    }
+
+    scored.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(limit);
+
+    let results: Vec<HybridSearchResult> = scored
+        .into_iter()
+        .map(|(chunk_id, item_id, chunk_text, sim)| {
+            let title = item_title(conn, &item_id).unwrap_or_default();
+            HybridSearchResult {
+                item_id,
+                title,
+                fts_rank: None,
+                vector_score: Some(sim),
+                combined_score: sim,
+                chunk_text: Some(chunk_text),
+                chunk_id: Some(chunk_id),
+            }
+        })
+        .collect();
+
     Ok(results)
 }
 
