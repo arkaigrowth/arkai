@@ -146,6 +146,32 @@ const MIGRATIONS: &[Migration] = &[
             DELETE FROM embeddings WHERE model != 'mxbai-embed-large';
         "#,
     },
+    Migration {
+        version: 3,
+        description: "add chunks and chunk_embeddings tables for transcript chunking",
+        sql: r#"
+            CREATE TABLE chunks (
+                id          TEXT PRIMARY KEY,
+                item_id     TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+                chunk_index INTEGER NOT NULL,
+                text        TEXT NOT NULL,
+                byte_start  INTEGER NOT NULL,
+                byte_end    INTEGER NOT NULL,
+                word_count  INTEGER NOT NULL,
+                metadata    TEXT DEFAULT '{}',
+                UNIQUE(item_id, chunk_index)
+            );
+            CREATE INDEX idx_chunks_item ON chunks(item_id);
+
+            CREATE TABLE chunk_embeddings (
+                chunk_id   TEXT PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
+                model      TEXT NOT NULL,
+                dimensions INTEGER NOT NULL,
+                vector     BLOB NOT NULL,
+                created_at TEXT NOT NULL
+            );
+        "#,
+    },
 ];
 
 /// Ensure the schema_migrations table exists.
@@ -278,6 +304,8 @@ mod tests {
             "evidence",
             "embeddings",
             "schema_migrations",
+            "chunks",
+            "chunk_embeddings",
         ];
 
         for table in expected_tables {
@@ -335,6 +363,6 @@ mod tests {
     fn test_schema_version_matches_latest() {
         let conn = memory_db();
         run_migrations(&conn).unwrap();
-        assert_eq!(current_version(&conn).unwrap(), 2);
+        assert_eq!(current_version(&conn).unwrap(), 3);
     }
 }

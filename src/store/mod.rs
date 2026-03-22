@@ -16,6 +16,7 @@
 //! - Schema migrations table: prevents the #1 SQLite tech debt pattern
 //! - Embedding model metadata in config table: model swaps are config changes
 
+pub mod chunking;
 pub mod db;
 pub mod embedding;
 pub mod import;
