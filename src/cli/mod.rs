@@ -15,6 +15,7 @@ use crate::adapters::{Adapter, FabricAdapter, ACTION_WEB, ACTION_YOUTUBE};
 use crate::core::{Orchestrator, Pipeline};
 use crate::library::{Catalog, CatalogItem, ContentType, LibraryContent};
 
+pub mod capture;
 pub mod evidence;
 pub mod voice;
 
@@ -167,6 +168,24 @@ pub enum Commands {
         #[command(subcommand)]
         command: voice::VoiceCommands,
     },
+
+    /// Capture a thought, reminder, or todo
+    Capture {
+        /// Text to capture
+        text: String,
+
+        /// Kind: note, reminder, todo, link (auto-detected if omitted)
+        #[arg(short, long)]
+        kind: Option<String>,
+
+        /// Tags (can be specified multiple times)
+        #[arg(short, long)]
+        tag: Vec<String>,
+
+        /// Due date for reminders (ISO date like 2026-03-25)
+        #[arg(short, long)]
+        due: Option<String>,
+    },
 }
 
 /// Content type for CLI (maps to ContentType)
@@ -253,6 +272,12 @@ impl Cli {
             } => run_pattern(&pattern_name, input, save, tags).await,
             Commands::Evidence { command } => execute_evidence(command).await,
             Commands::Voice { command } => voice::execute(command).await,
+            Commands::Capture {
+                text,
+                kind,
+                tag,
+                due,
+            } => capture::execute_capture(text, kind, tag, due).await,
         }
     }
 }
