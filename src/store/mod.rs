@@ -27,4 +27,4 @@ pub mod search;
 
 pub use db::{Store, StoreConfig};
 pub use embedding::{cosine_similarity, EmbeddingProvider, OllamaProvider};
-pub use search::{hybrid_search, vector_search, HybridSearchResult};
+pub use search::{hybrid_search, multi_level_search, vector_search, HybridSearchResult};

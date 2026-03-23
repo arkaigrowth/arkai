@@ -314,11 +314,14 @@ arkai triage
 #   s = SKIP
 #   q = QUIT
 
-# Snooze a specific item
-arkai snooze <item_id> --until "tomorrow 9am"
+# Snooze a specific item (accepts full ID or unique prefix)
+# Supported formats: YYYY-MM-DD (local timezone) or RFC3339
+# Natural-language ("tomorrow 9am") is NOT yet supported.
+arkai snooze <id-or-prefix> --until 2026-04-01
+arkai snooze <id-or-prefix> --until 2026-04-01T09:00:00+00:00
 
-# Mark done
-arkai done <item_id>
+# Mark done (accepts full ID or unique prefix)
+arkai done <id-or-prefix>
 ```
 
 ### Triage Model (borrowed from iron-ledger-atc)
@@ -582,29 +585,46 @@ When arkai captures with `--sync-openclaw`:
 
 ```
 Phase 1 (search quality — INDEPENDENT, can parallelize)
-├── A1: Transcript chunker (store/chunking.rs)           ~150 lines
-├── A2: Migration 003 (chunks + chunk_embeddings)         ~30 lines
-├── A3: Chunk queries (store/queries.rs additions)        ~100 lines
-├── A4: Chunk-aware search (store/search.rs update)       ~80 lines
-├── A5: CLI: store import chunks + embeds transcripts     ~60 lines
-└── D1: Eval framework + query set                        ~200 lines
+├── A1: Transcript chunker (store/chunking.rs)           SHIPPED 2026-03-22
+├── A2: Migration 003 (chunks + chunk_embeddings)         SHIPPED 2026-03-22
+├── A3: Chunk queries (store/queries.rs additions)        SHIPPED 2026-03-22
+├── A4: Chunk-aware search (store/search.rs update)       SHIPPED 2026-03-22
+│       multi_level_search: item+chunk RRF with CHUNK_WEIGHT=0.5
+│       FTS5 sanitize_fts_query: phrase-quoting for safety (see note below)
+├── A5: CLI: store import chunks + embeds transcripts     SHIPPED 2026-03-22
+└── D1: Eval framework + query set                        NOT STARTED
 
 Phase 2 (capture — INDEPENDENT of Phase 1)
-├── B1: Capture CLI (cli/capture.rs)                      ~150 lines
-├── B2: Auto-classification (store/capture.rs)            ~100 lines
-├── B3: Capture store integration + embedding             ~50 lines
-└── B4: OpenClaw capture_inbox sync                       ~40 lines
+├── B1: Capture CLI (cli/capture.rs)                      SHIPPED 2026-03-22
+├── B2: Auto-classification (store/capture.rs)            SHIPPED 2026-03-22
+├── B3: Capture store integration + embedding             SHIPPED 2026-03-22
+└── B4: OpenClaw capture_inbox sync                       NOT STARTED
+        No --sync-openclaw flag. No arkai_capture bridge tool.
 
 Phase 3 (triage/surfacing — DEPENDS on Phase 2)
-├── C1: Today command (cli/triage.rs)                     ~150 lines
-├── C2: Triage interactive (cli/triage.rs)                ~100 lines
-├── C3: Snooze/Done commands                              ~50 lines
-└── C4: Capture queries (by status, horizon, priority)    ~80 lines
+├── C1: Today command (cli/triage.rs)                     SHIPPED 2026-03-23
+│       arkai today, arkai today --json
+├── C2: Triage interactive (cli/triage.rs)                DEFERRED
+│       No interactive arkai triage command yet.
+├── C3: Snooze/Done commands                              SHIPPED 2026-03-23
+│       arkai done <id-or-prefix>, arkai snooze <id-or-prefix> --until <date>
+│       Prefix-ID resolution: unique prefix works, ambiguous errors clearly.
+│       Snooze accepts YYYY-MM-DD (local timezone) or RFC3339.
+│       Natural-language input ("tomorrow 9am") is NOT supported yet.
+└── C4: Capture queries (by status, horizon, priority)    SHIPPED 2026-03-23
+        list_active_captures, update_capture_status, resolve_capture_by_prefix
 
 Phase 4 (proactive — DEPENDS on Phase 1 + 2)
-├── E1: Related items on capture                          ~50 lines
-└── E2: Related items on search (--related flag)          ~30 lines
+├── E1: Related items on capture                          NOT STARTED
+└── E2: Related items on search (--related flag)          NOT STARTED
 ```
+
+**Note on FTS5 sanitization (A4):** All user queries are phrase-quoted before
+passing to FTS5 MATCH, which prevents crashes on date-like text, hyphens, and
+FTS5 operator characters. This is a deliberate safety-over-recall tradeoff:
+FTS5 now acts as a precision boost (exact phrase match) while semantic/vector
+search carries recall. Multi-word non-contiguous keyword queries will not match
+via FTS5 — only via the vector path. Acceptable for this pass.
 
 **Parallelization**: Phase 1 and Phase 2 can be built by separate agents simultaneously.
 Phase 3 depends on Phase 2 (needs captures to triage). Phase 4 depends on both.
@@ -617,19 +637,19 @@ Phase 3 depends on Phase 2 (needs captures to triage). Phase 4 depends on both.
 
 ### Must Have (ship-blocking)
 
-- [ ] `arkai search --semantic "story about..."` returns transcript chunks, not just titles
-- [ ] `arkai capture "text"` works in <500ms with auto-classification
-- [ ] `arkai today` shows a useful 5-item summary
-- [ ] Eval framework reports hit@3 on 15+ queries
-- [ ] All existing 180 tests still pass
-- [ ] New modules have >80% test coverage
+- [x] `arkai search --semantic "story about..."` returns transcript chunks, not just titles
+- [x] `arkai capture "text"` works in <500ms with auto-classification
+- [x] `arkai today` shows a useful 5-item summary
+- [ ] Eval framework reports hit@3 on 15+ queries — NOT STARTED (D1)
+- [x] All existing tests still pass — 238 tests, 0 failures (as of 2026-03-23)
+- [x] New modules have >80% test coverage
 
 ### Should Have (v1 polish)
 
-- [ ] `arkai triage` interactive flow works
-- [ ] Snooze/done commands work
-- [ ] Capture syncs to OpenClaw capture_inbox.jsonl
-- [ ] Related items shown on capture
+- [ ] `arkai triage` interactive flow works — DEFERRED (C2)
+- [x] Snooze/done commands work — SHIPPED with prefix-ID resolution
+- [ ] Capture syncs to OpenClaw capture_inbox.jsonl — NOT STARTED (B4)
+- [ ] Related items shown on capture — NOT STARTED (E1)
 
 ### Won't Have (v2 / later)
 

@@ -222,6 +222,10 @@ pub fn count_items(store: &Store, item_type: Option<&str>) -> Result<i64> {
 
 /// Full-text search on items. Returns results ranked by relevance.
 pub fn search_items(store: &Store, query: &str, limit: Option<usize>) -> Result<Vec<SearchResult>> {
+    let safe_query = crate::store::search::sanitize_fts_query(query);
+    if safe_query.is_empty() {
+        return Ok(Vec::new());
+    }
     let limit_val = limit.unwrap_or(20) as i64;
 
     let mut stmt = store.conn().prepare_cached(
@@ -235,7 +239,7 @@ pub fn search_items(store: &Store, query: &str, limit: Option<usize>) -> Result<
          LIMIT ?2",
     )?;
 
-    let rows = stmt.query_map(params![query, limit_val], |row| {
+    let rows = stmt.query_map(params![safe_query, limit_val], |row| {
         Ok(SearchRow {
             item: ItemRow {
                 id: row.get(0)?,
@@ -625,6 +629,136 @@ pub fn store_chunk_embedding(
         params![chunk_id, model, dimensions, blob, now],
     )?;
     Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Capture triage queries
+// ─────────────────────────────────────────────────────────────────
+
+/// List active captures: not done, and not snoozed (or snooze expired).
+///
+/// Uses COALESCE for missing metadata fields so the query is resilient
+/// to captures created before status/horizon/priority were populated.
+pub fn list_active_captures(store: &Store) -> Result<Vec<Item>> {
+    let now = Utc::now().to_rfc3339();
+    let mut stmt = store.conn().prepare_cached(
+        "SELECT id, item_type, title, source_url, content_type,
+                tags, artifacts, run_id, created_at, updated_at, metadata
+         FROM items
+         WHERE item_type = 'capture'
+           AND COALESCE(json_extract(metadata, '$.status'), 'inbox') != 'done'
+           AND (
+               COALESCE(json_extract(metadata, '$.status'), 'inbox') != 'snoozed'
+               OR json_extract(metadata, '$.snoozed_until') <= ?1
+               OR json_extract(metadata, '$.snoozed_until') IS NULL
+           )
+         ORDER BY created_at DESC",
+    )?;
+
+    let rows = stmt.query_map([&now], |row| {
+        Ok(ItemRow {
+            id: row.get(0)?,
+            item_type: row.get(1)?,
+            title: row.get(2)?,
+            source_url: row.get(3)?,
+            content_type: row.get(4)?,
+            tags: row.get(5)?,
+            artifacts: row.get(6)?,
+            run_id: row.get(7)?,
+            created_at: row.get(8)?,
+            updated_at: row.get(9)?,
+            metadata: row.get(10)?,
+        })
+    })?;
+
+    let mut items = Vec::new();
+    for row in rows {
+        items.push(row?.into_item()?);
+    }
+    Ok(items)
+}
+
+/// Count snoozed captures (for the today summary footer).
+pub fn count_snoozed_captures(store: &Store) -> Result<i64> {
+    let now = Utc::now().to_rfc3339();
+    let count: i64 = store.conn().query_row(
+        "SELECT COUNT(*) FROM items
+         WHERE item_type = 'capture'
+           AND json_extract(metadata, '$.status') = 'snoozed'
+           AND json_extract(metadata, '$.snoozed_until') > ?1",
+        [&now],
+        |row| row.get(0),
+    )?;
+    Ok(count)
+}
+
+/// Update a capture's status (done, snoozed, etc.) using json_set.
+///
+/// Returns true if a row was updated, false if the item doesn't exist
+/// or is not a capture.
+pub fn update_capture_status(
+    store: &Store,
+    id: &str,
+    new_status: &str,
+    snoozed_until: Option<&str>,
+) -> Result<bool> {
+    let now = Utc::now().to_rfc3339();
+    let rows_changed = store.conn().execute(
+        "UPDATE items
+         SET metadata = json_set(metadata, '$.status', ?1, '$.snoozed_until', ?2),
+             updated_at = ?3
+         WHERE id = ?4 AND item_type = 'capture'",
+        params![new_status, snoozed_until, now, id],
+    )?;
+    Ok(rows_changed > 0)
+}
+
+/// Resolve a capture ID from an exact ID or unique prefix.
+///
+/// Returns the full ID if:
+/// - The input matches a capture ID exactly, OR
+/// - The input is a unique prefix of exactly one capture ID.
+///
+/// Returns an error if the prefix is ambiguous (matches multiple captures)
+/// or if no capture matches at all.
+pub fn resolve_capture_id(store: &Store, id_or_prefix: &str) -> Result<String> {
+    // Try exact match first
+    let exact: Option<String> = store
+        .conn()
+        .query_row(
+            "SELECT id FROM items WHERE id = ?1 AND item_type = 'capture'",
+            [id_or_prefix],
+            |row| row.get(0),
+        )
+        .ok();
+
+    if let Some(full_id) = exact {
+        return Ok(full_id);
+    }
+
+    // Try prefix match
+    let pattern = format!("{}%", id_or_prefix);
+    let mut stmt = store.conn().prepare_cached(
+        "SELECT id FROM items WHERE id LIKE ?1 AND item_type = 'capture'",
+    )?;
+    let matches: Vec<String> = stmt
+        .query_map([&pattern], |row| row.get(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    match matches.len() {
+        0 => anyhow::bail!("No capture found matching '{}'", id_or_prefix),
+        1 => Ok(matches.into_iter().next().unwrap()),
+        n => {
+            let previews: Vec<String> = matches.iter().take(5).cloned().collect();
+            anyhow::bail!(
+                "Ambiguous prefix '{}': matches {} captures ({})",
+                id_or_prefix,
+                n,
+                previews.join(", ")
+            )
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -1122,5 +1256,195 @@ mod tests {
         )
         .unwrap();
         assert!(!dup); // duplicate ignored
+    }
+
+    // -- Capture triage query tests --
+
+    fn insert_capture(store: &Store, id: &str, title: &str, metadata: serde_json::Value) {
+        let tags: Vec<String> = vec![];
+        let upsert = UpsertItem {
+            id,
+            item_type: "capture",
+            title,
+            source_url: None,
+            content_type: None,
+            tags: &tags,
+            artifacts: &[],
+            run_id: None,
+            metadata: &metadata,
+        };
+        upsert_item(store, &upsert).unwrap();
+    }
+
+    #[test]
+    fn test_list_active_captures_excludes_done() {
+        let store = test_store();
+        insert_capture(&store, "c1", "active todo", serde_json::json!({"status": "inbox"}));
+        insert_capture(&store, "c2", "done task", serde_json::json!({"status": "done"}));
+        insert_capture(&store, "c3", "triaged item", serde_json::json!({"status": "triaged"}));
+
+        let active = list_active_captures(&store).unwrap();
+        assert_eq!(active.len(), 2);
+        assert!(active.iter().any(|i| i.id == "c1"));
+        assert!(active.iter().any(|i| i.id == "c3"));
+        assert!(active.iter().all(|i| i.id != "c2"));
+    }
+
+    #[test]
+    fn test_list_active_captures_excludes_snoozed_future() {
+        let store = test_store();
+        insert_capture(
+            &store, "c1", "snoozed item",
+            serde_json::json!({"status": "snoozed", "snoozed_until": "2099-01-01T00:00:00+00:00"}),
+        );
+        insert_capture(&store, "c2", "active item", serde_json::json!({"status": "inbox"}));
+
+        let active = list_active_captures(&store).unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].id, "c2");
+    }
+
+    #[test]
+    fn test_list_active_captures_includes_expired_snooze() {
+        let store = test_store();
+        insert_capture(
+            &store, "c1", "expired snooze",
+            serde_json::json!({"status": "snoozed", "snoozed_until": "2020-01-01T00:00:00+00:00"}),
+        );
+
+        let active = list_active_captures(&store).unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].id, "c1");
+    }
+
+    #[test]
+    fn test_list_active_captures_handles_missing_status() {
+        let store = test_store();
+        // Capture with empty metadata — COALESCE defaults to 'inbox'
+        insert_capture(&store, "c1", "no status", serde_json::json!({}));
+
+        let active = list_active_captures(&store).unwrap();
+        assert_eq!(active.len(), 1);
+    }
+
+    #[test]
+    fn test_update_capture_status_to_done() {
+        let store = test_store();
+        insert_capture(&store, "c1", "task to finish", serde_json::json!({"status": "inbox"}));
+
+        let updated = update_capture_status(&store, "c1", "done", None).unwrap();
+        assert!(updated);
+
+        let item = get_item(&store, "c1").unwrap().unwrap();
+        assert_eq!(item.metadata["status"], "done");
+    }
+
+    #[test]
+    fn test_update_capture_status_to_snoozed() {
+        let store = test_store();
+        insert_capture(&store, "c1", "snooze me", serde_json::json!({"status": "inbox"}));
+
+        let updated = update_capture_status(
+            &store, "c1", "snoozed", Some("2099-12-01T00:00:00+00:00"),
+        ).unwrap();
+        assert!(updated);
+
+        let item = get_item(&store, "c1").unwrap().unwrap();
+        assert_eq!(item.metadata["status"], "snoozed");
+        assert_eq!(item.metadata["snoozed_until"], "2099-12-01T00:00:00+00:00");
+    }
+
+    #[test]
+    fn test_update_nonexistent_capture_returns_false() {
+        let store = test_store();
+        let updated = update_capture_status(&store, "nonexistent", "done", None).unwrap();
+        assert!(!updated);
+    }
+
+    #[test]
+    fn test_update_does_not_affect_content_items() {
+        let store = test_store();
+        // Insert a content item (not capture)
+        let tags: Vec<String> = vec!["rust".into()];
+        let upsert = UpsertItem {
+            id: "content-item-01",
+            item_type: "content",
+            title: "Rust Guide",
+            source_url: Some("https://example.com"),
+            content_type: Some("web"),
+            tags: &tags,
+            artifacts: &[],
+            run_id: None,
+            metadata: &serde_json::json!({}),
+        };
+        upsert_item(&store, &upsert).unwrap();
+
+        // update_capture_status should NOT touch non-capture items
+        let updated = update_capture_status(&store, "content-item-01", "done", None).unwrap();
+        assert!(!updated);
+    }
+
+    // -- Prefix-ID resolution tests --
+
+    #[test]
+    fn test_resolve_capture_exact_id() {
+        let store = test_store();
+        insert_capture(&store, "abc12345def67890", "a task", serde_json::json!({"status": "inbox"}));
+
+        let resolved = resolve_capture_id(&store, "abc12345def67890").unwrap();
+        assert_eq!(resolved, "abc12345def67890");
+    }
+
+    #[test]
+    fn test_resolve_capture_unique_prefix() {
+        let store = test_store();
+        insert_capture(&store, "abc12345def67890", "task A", serde_json::json!({"status": "inbox"}));
+        insert_capture(&store, "xyz98765fed43210", "task B", serde_json::json!({"status": "inbox"}));
+
+        let resolved = resolve_capture_id(&store, "abc123").unwrap();
+        assert_eq!(resolved, "abc12345def67890");
+    }
+
+    #[test]
+    fn test_resolve_capture_ambiguous_prefix() {
+        let store = test_store();
+        insert_capture(&store, "abc12345aaa00000", "task A", serde_json::json!({"status": "inbox"}));
+        insert_capture(&store, "abc12345bbb11111", "task B", serde_json::json!({"status": "inbox"}));
+
+        let result = resolve_capture_id(&store, "abc123");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Ambiguous"), "Error should mention ambiguity: {}", err_msg);
+    }
+
+    #[test]
+    fn test_resolve_capture_nonexistent() {
+        let store = test_store();
+        insert_capture(&store, "abc12345def67890", "a task", serde_json::json!({"status": "inbox"}));
+
+        let result = resolve_capture_id(&store, "zzz999");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("No capture found"), "Error should say not found: {}", err_msg);
+    }
+
+    #[test]
+    fn test_resolve_ignores_non_capture_items() {
+        let store = test_store();
+        // Insert a content item (not capture) with matching prefix
+        let tags: Vec<String> = vec![];
+        upsert_item(&store, &UpsertItem {
+            id: "abc12345content1",
+            item_type: "content",
+            title: "A Content Item",
+            source_url: Some("https://example.com"),
+            content_type: Some("web"),
+            tags: &tags, artifacts: &[], run_id: None,
+            metadata: &serde_json::json!({}),
+        }).unwrap();
+
+        // Prefix "abc123" should NOT match the content item
+        let result = resolve_capture_id(&store, "abc123");
+        assert!(result.is_err());
     }
 }
