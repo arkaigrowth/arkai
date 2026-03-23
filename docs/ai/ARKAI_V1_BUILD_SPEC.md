@@ -285,44 +285,40 @@ When `--sync-openclaw` flag is passed (or configured as default):
 Help user stay on top of captures without overwhelm. Inspired by iron-ledger-atc's
 horizon/MoSCoW/snooze patterns.
 
-### CLI Commands
+### CLI Commands (shipped)
 
 ```bash
 # What needs attention today
 arkai today
 # Output:
-#   Do Today (3 items):
-#     [MUST] Submit tax documents (due: 2026-03-25, 3 days)
-#     [SHOULD] Review PR for client X (captured: yesterday)
-#     [COULD] Call dentist about insurance
+#   Today -- 4 active  (1 snoozed)
 #
-#   Heads Up (2 items):
-#     Invoice from vendor (email, needs reply by 03-28)
-#     Weekly report due Friday
+#   Do Today (2)
+#     [35f90d8] review the v1 build spec with Alex     should
+#     [b0eba79] submit tax documents  due 2026-03-25    must
 #
-#   Recent Captures (uncategorized: 5):
-#     Run 'arkai triage' to classify
+#   Heads Up (1)
+#     [81e8eb0] interesting link about RAG               could
+#
+#   2 in inbox
 
-# Triage uncategorized items
-arkai triage
-# Interactive: shows each INBOX item, user types:
-#   n = NOW (today/tomorrow)
-#   w = WEEK (this week)
-#   l = LATER (someday)
-#   z = SNOOZE (choose duration)
-#   d = DONE (mark complete)
-#   s = SKIP
-#   q = QUIT
+# Machine-readable output for OpenClaw / scripting
+arkai today --json
 
-# Snooze a specific item (accepts full ID or unique prefix)
+# Mark done (accepts full ID or unique prefix as shown by today)
+arkai done <id-or-prefix>
+
+# Snooze a capture (accepts full ID or unique prefix)
 # Supported formats: YYYY-MM-DD (local timezone) or RFC3339
 # Natural-language ("tomorrow 9am") is NOT yet supported.
 arkai snooze <id-or-prefix> --until 2026-04-01
 arkai snooze <id-or-prefix> --until 2026-04-01T09:00:00+00:00
-
-# Mark done (accepts full ID or unique prefix)
-arkai done <id-or-prefix>
 ```
+
+### Deferred: Interactive Triage
+
+`arkai triage` (interactive inbox classification with n/w/l/z/d/s/q keybindings)
+is deferred until today/done/snooze prove useful in daily use.
 
 ### Triage Model (borrowed from iron-ledger-atc)
 
@@ -340,42 +336,47 @@ Auto-triage rules:
 - kind=link → horizon=LATER
 ```
 
-### Surfacing Logic (`arkai today`)
+### Surfacing Logic (`arkai today`) — shipped
 
 ```
-1. Load all captures where status != DONE and status != SNOOZED (or snooze expired)
-2. Group by horizon:
-   NOW  → "Do Today" section (sorted by: priority DESC, due_date ASC, captured_at ASC)
-   WEEK → "Heads Up" section (sorted by: due_date ASC, priority DESC)
-   INBOX → "Uncategorized" count
+1. list_active_captures(): status != done AND (status != snoozed OR snooze expired)
+   Uses COALESCE for missing metadata fields (resilient to old captures).
+2. Group by metadata.horizon:
+   NOW  → "Do Today" section (sorted by: priority weight ASC, due_date ASC)
+   WEEK → "Heads Up" section (same sort)
+   LATER / missing → counted as "inbox" (not displayed individually)
 3. Cap at 5 items per section (reduce overwhelm)
-4. Show snooze count: "3 items snoozed, next resurfaces at 2pm"
+4. Show snooze count in header: "Today -- N active  (M snoozed)"
 ```
 
-### Files to Create/Modify
+### Files (shipped)
 
-| File | Action | Description |
+| File | Status | Description |
 |------|--------|-------------|
-| `src/cli/triage.rs` | CREATE | Triage interactive CLI + today/snooze/done commands |
-| `src/store/queries.rs` | MODIFY | Add capture queries (by status, horizon, priority) |
-| `src/store/migrations.rs` | MODIFY | No schema change needed — uses items.metadata JSON |
-| `src/cli/mod.rs` | MODIFY | Add Today, Triage, Snooze, Done commands |
+| `src/cli/triage.rs` | SHIPPED | today/done/snooze handlers, parse_snooze_until, truncate_chars |
+| `src/store/queries.rs` | SHIPPED | list_active_captures, update_capture_status, resolve_capture_id, count_snoozed_captures |
+| `src/cli/mod.rs` | SHIPPED | Today, Done, Snooze command variants + dispatch |
+| `src/store/migrations.rs` | No change needed — uses items.metadata JSON |
 
-### Tests
+### Tests (shipped)
 
 - `test_today_groups_by_horizon` — items sorted into correct sections
-- `test_today_caps_at_5` — no section exceeds 5 items
-- `test_snooze_hides_item` — snoozed item doesn't appear in today
-- `test_snooze_expires` — item reappears after snooze_until passes
-- `test_auto_triage_due_date` — due within 48h → NOW/MUST
-- `test_done_marks_complete` — item no longer in today
+- `test_today_caps_at_5` — query returns all, display caps at 5
+- `test_priority_sorting` — must > should > could
+- `test_list_active_captures_excludes_done` — done items filtered
+- `test_list_active_captures_excludes_snoozed_future` — future snooze hidden
+- `test_list_active_captures_includes_expired_snooze` — expired snooze resurfaces
+- `test_update_capture_status_to_done` / `_to_snoozed` — json_set works
+- `test_resolve_capture_unique_prefix` / `_ambiguous` / `_nonexistent`
+- `test_truncate_chars_unicode_safe` — emoji/curly quotes don't panic
+- `test_parse_snooze_until_accepts_date` / `_rfc3339` / `_rejects_garbage`
 
 ### Done When
 
-- [ ] `arkai today` shows a useful summary in <200ms
-- [ ] `arkai triage` lets user classify 10 items in <60 seconds
-- [ ] Snoozed items reappear when snooze expires
-- [ ] Overdue reminders surface at top with MUST priority
+- [x] `arkai today` shows a useful summary — SHIPPED
+- [x] Snooze/done commands work with prefix-ID resolution — SHIPPED
+- [x] Snoozed items reappear when snooze expires — SHIPPED
+- [ ] `arkai triage` interactive classification — DEFERRED
 
 ---
 
