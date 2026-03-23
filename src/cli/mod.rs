@@ -17,6 +17,7 @@ use crate::library::{Catalog, CatalogItem, ContentType, LibraryContent};
 
 pub mod capture;
 pub mod evidence;
+pub mod triage;
 pub mod voice;
 
 /// arkai - Event-sourced AI pipeline orchestrator
@@ -186,6 +187,29 @@ pub enum Commands {
         #[arg(short, long)]
         due: Option<String>,
     },
+
+    /// Show active captures grouped by horizon
+    Today {
+        /// Output as JSON (for scripting/OpenClaw integration)
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Mark a capture as done
+    Done {
+        /// Item ID (or prefix, as shown by `arkai today`)
+        item_id: String,
+    },
+
+    /// Snooze a capture until a future date
+    Snooze {
+        /// Item ID (or prefix, as shown by `arkai today`)
+        item_id: String,
+
+        /// Date/time to snooze until (YYYY-MM-DD or RFC3339)
+        #[arg(long)]
+        until: String,
+    },
 }
 
 /// Content type for CLI (maps to ContentType)
@@ -278,6 +302,11 @@ impl Cli {
                 tag,
                 due,
             } => capture::execute_capture(text, kind, tag, due).await,
+            Commands::Today { json } => triage::execute_today(json).await,
+            Commands::Done { item_id } => triage::execute_done(item_id).await,
+            Commands::Snooze { item_id, until } => {
+                triage::execute_snooze(item_id, until).await
+            }
         }
     }
 }
@@ -811,8 +840,8 @@ async fn search_semantic(query: &str, limit: usize) -> Result<()> {
     let query_vec: Vec<f32> = provider.embed(query).await
         .context("Failed to embed query. Is Ollama running with the right model?")?;
 
-    // Run hybrid search
-    let results = store::search::hybrid_search(store.conn(), &query_vec, query, limit)?;
+    // Run multi-level search (items + chunks)
+    let results = store::search::multi_level_search(store.conn(), &query_vec, query, limit)?;
 
     if results.is_empty() {
         println!("No results found for: \"{}\"", query);
@@ -827,8 +856,14 @@ async fn search_semantic(query: &str, limit: usize) -> Result<()> {
     println!("{}", "-".repeat(90));
 
     for r in &results {
-        let fts = r.fts_rank.map(|v| format!("{:.3}", v)).unwrap_or_else(|| "-".into());
-        let vec = r.vector_score.map(|v| format!("{:.3}", v)).unwrap_or_else(|| "-".into());
+        let fts = r
+            .fts_rank
+            .map(|v| format!("{:.3}", v))
+            .unwrap_or_else(|| "-".into());
+        let vec = r
+            .vector_score
+            .map(|v| format!("{:.3}", v))
+            .unwrap_or_else(|| "-".into());
         let title = if r.title.len() > 48 {
             format!("{}...", &r.title[..48])
         } else {
@@ -838,6 +873,16 @@ async fn search_semantic(query: &str, limit: usize) -> Result<()> {
             "{:<18} {:<7.4} {:<7} {:<7} {}",
             r.item_id, r.combined_score, fts, vec, title
         );
+
+        // Show chunk snippet if available
+        if let Some(ref chunk_text) = r.chunk_text {
+            let snippet = if chunk_text.len() > 150 {
+                format!("{}...", &chunk_text[..150])
+            } else {
+                chunk_text.clone()
+            };
+            println!("  >> {}", snippet.replace('\n', " "));
+        }
     }
 
     Ok(())
@@ -873,11 +918,25 @@ async fn execute_store(command: StoreCommands) -> Result<()> {
             let embed_count: i64 = store.conn().query_row(
                 "SELECT COUNT(*) FROM embeddings", [], |row| row.get(0),
             )?;
+            let chunk_count = store::queries::count_chunks(&store, None)?;
+            let chunk_embed_count: i64 = store.conn().query_row(
+                "SELECT COUNT(*) FROM chunk_embeddings",
+                [],
+                |row| row.get(0),
+            )?;
+            let captures = store::queries::count_items(&store, Some("capture"))?;
 
             println!("Store: {}", db_path.display());
             println!("Schema version: {}", version);
-            println!("Items: {} total ({} content, {} email)", items, content, emails);
+            println!(
+                "Items: {} total ({} content, {} capture, {} email)",
+                items, content, captures, emails
+            );
             println!("Embeddings: {} / {} items", embed_count, items);
+            println!(
+                "Chunks: {} ({} embedded)",
+                chunk_count, chunk_embed_count
+            );
             println!("Model: {} ({}d)", model, dims);
             Ok(())
         }
@@ -913,9 +972,10 @@ async fn execute_store(command: StoreCommands) -> Result<()> {
                 }
             }
 
-            // Compute embeddings
+            // Compute embeddings and chunk transcripts
             if embed {
                 compute_embeddings_for_store(&store).await?;
+                chunk_and_embed_transcripts(&store).await?;
             }
 
             let total = store::queries::count_items(&store, None)?;
@@ -964,6 +1024,128 @@ async fn compute_embeddings_for_store(store: &crate::store::Store) -> Result<()>
         }
     }
     println!("\r  Embedded {} items ({} already had embeddings).", embedded, skipped);
+    Ok(())
+}
+
+/// Chunk transcripts and embed the chunks for all content items with transcript files.
+///
+/// For each content item:
+/// 1. Skip if chunks already exist for this item
+/// 2. Find transcript.txt via metadata.library_path
+/// 3. Chunk using SentenceGroup strategy (if >500 words)
+/// 4. Store chunks in the chunks table
+/// 5. Embed each chunk and store in chunk_embeddings
+async fn chunk_and_embed_transcripts(store: &crate::store::Store) -> Result<()> {
+    use crate::store::chunking::{chunk_text, ChunkStrategy};
+    use crate::store::embedding::{EmbeddingConfig, EmbeddingProvider, OllamaProvider};
+    use crate::store::queries;
+
+    let pairs = load_embedding_pairs(store)?;
+    let config = EmbeddingConfig::from_store_config(&pairs)?;
+    let dims = config.dimensions;
+    let model_name = config.model.clone();
+    let provider = OllamaProvider::new(config);
+
+    let items = queries::list_items(store, Some(1000))?;
+    let mut chunked_items = 0;
+    let mut total_chunks = 0;
+    let mut embedded_chunks = 0;
+    let mut skipped = 0;
+
+    for item in &items {
+        if item.item_type != "content" {
+            continue;
+        }
+
+        // Skip if chunks already exist for this item
+        let existing = queries::count_chunks(store, Some(&item.id))?;
+        if existing > 0 {
+            skipped += 1;
+            continue;
+        }
+
+        // Find transcript file via metadata.library_path
+        let library_path = item.metadata.get("library_path").and_then(|v| v.as_str());
+        let Some(lib_path) = library_path else {
+            continue;
+        };
+
+        let transcript_path = std::path::Path::new(lib_path).join("transcript.txt");
+        if !transcript_path.exists() {
+            continue;
+        }
+
+        // Read transcript
+        let transcript = match std::fs::read_to_string(&transcript_path) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!(
+                    "  Warning: failed to read transcript for '{}': {}",
+                    item.title, e
+                );
+                continue;
+            }
+        };
+
+        let word_count = transcript.split_whitespace().count();
+        let strategy = ChunkStrategy::for_item_type(&item.item_type, word_count);
+
+        // Chunk the transcript
+        let chunks = chunk_text(&item.id, &transcript, &strategy);
+        if chunks.is_empty() {
+            continue;
+        }
+
+        // Store chunks
+        for chunk in &chunks {
+            queries::insert_chunk(
+                store,
+                &chunk.id,
+                &chunk.item_id,
+                chunk.chunk_index as i64,
+                &chunk.text,
+                chunk.byte_start as i64,
+                chunk.byte_end as i64,
+                chunk.word_count as i64,
+                "{}",
+            )?;
+        }
+        total_chunks += chunks.len();
+        chunked_items += 1;
+
+        // Embed each chunk
+        for chunk in &chunks {
+            match provider.embed(&chunk.text).await {
+                Ok(vector) => {
+                    queries::store_chunk_embedding(
+                        store,
+                        &chunk.id,
+                        &model_name,
+                        dims as i32,
+                        &vector,
+                    )?;
+                    embedded_chunks += 1;
+                    print!(
+                        "\r  Chunking: {} items, {} chunks ({} embedded)...",
+                        chunked_items, total_chunks, embedded_chunks
+                    );
+                }
+                Err(e) => {
+                    eprintln!(
+                        "\n  Warning: failed to embed chunk {} of '{}': {}",
+                        chunk.chunk_index, item.title, e
+                    );
+                }
+            }
+        }
+    }
+
+    if chunked_items > 0 || skipped > 0 {
+        println!(
+            "\r  Chunked {} items into {} chunks ({} embedded, {} already chunked).",
+            chunked_items, total_chunks, embedded_chunks, skipped
+        );
+    }
     Ok(())
 }
 
