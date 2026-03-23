@@ -3,11 +3,12 @@
 //! Implements `arkai capture "text"` for quick thought/reminder/todo capture.
 //! Auto-classifies input text and stores it as an item in the SQLite store.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 
 use crate::store::capture::{auto_classify, build_capture_metadata, CaptureKind};
-use crate::store::queries::{upsert_item, UpsertItem};
+use crate::store::embedding::{EmbeddingConfig, EmbeddingProvider, OllamaProvider};
+use crate::store::queries::{self, upsert_item, UpsertItem};
 use crate::store::{Store, StoreConfig};
 
 /// Execute the capture command: classify text and store it.
@@ -62,6 +63,14 @@ pub async fn execute_capture(
 
     upsert_item(&store, &upsert)?;
 
+    // Embed immediately so the capture is vector-searchable
+    match embed_capture(&store, &id, &text, &tags).await {
+        Ok(()) => {}
+        Err(e) => {
+            eprintln!("Warning: embedding failed (capture still saved): {}", e);
+        }
+    }
+
     // Print confirmation
     let kind_str = serde_json::to_string(&classification.kind).unwrap_or_default();
     let kind_display = kind_str.trim_matches('"');
@@ -74,6 +83,35 @@ pub async fn execute_capture(
     }
     println!("ID: {}", id);
 
+    Ok(())
+}
+
+/// Embed a capture immediately after storing it.
+async fn embed_capture(store: &Store, id: &str, text: &str, tags: &[String]) -> Result<()> {
+    // Load embedding config from store
+    let keys = [
+        ("embedding_provider", "embedding.provider"),
+        ("embedding_model", "embedding.model"),
+        ("embedding_dimensions", "embedding.dimensions"),
+    ];
+    let mut pairs = Vec::new();
+    for (store_key, config_key) in keys {
+        if let Some(value) = store.get_config(store_key)? {
+            pairs.push((config_key.to_string(), value));
+        }
+    }
+
+    let config = EmbeddingConfig::from_store_config(&pairs)
+        .context("Failed to load embedding config")?;
+    let dims = config.dimensions;
+    let model_name = config.model.clone();
+    let provider = OllamaProvider::new(config);
+
+    // Embed: title + tags (same strategy as store import)
+    let embed_text = format!("{} {}", text, tags.join(" "));
+    let vector: Vec<f32> = provider.embed(&embed_text).await?;
+
+    queries::store_embedding(store, id, &model_name, dims as i32, &vector)?;
     Ok(())
 }
 
