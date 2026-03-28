@@ -595,7 +595,7 @@ async fn ingest_youtube(url: &str, tags: Option<String>, title: Option<String>) 
             "--model",
             "large-v3-turbo",
             "--output_format",
-            "txt",
+            "all",
             "--output_dir",
             &work_dir.path().to_string_lossy(),
         ],
@@ -607,8 +607,13 @@ async fn ingest_youtube(url: &str, tags: Option<String>, title: Option<String>) 
     let word_count = transcript.split_whitespace().count();
     eprintln!("  Transcribed: {} words", word_count);
 
-    // 5. Write transcript to content dir
+    // 5. Write transcripts to content dir
     std::fs::write(content_dir.join("transcript.txt"), &transcript)?;
+    // Copy Whisper JSON (word-level timestamps) if produced
+    let whisper_json = work_dir.path().join("audio.json");
+    if whisper_json.exists() {
+        std::fs::copy(&whisper_json, content_dir.join("transcript.json"))?;
+    }
 
     // 6. Parse tags for metadata + catalog
     let tag_list: Vec<String> = tags
