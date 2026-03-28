@@ -60,42 +60,27 @@ if zero scene changes are detected on a video longer than 60 seconds.
 0-100 (NOT `s=N`, which is a boolean for `sc_pass`). The script maps our 0.0-1.0
 CLI range to ffmpeg's 0-100 range internally.
 
-## Next Durable Step: Preserve Whisper JSON in Arkai Ingest
+## Whisper JSON Preservation — DONE (commit 69a1075)
 
-**One-line change** in `src/cli/mod.rs` at line 598:
+Arkai ingest now produces BOTH `transcript.txt` AND `transcript.json`:
+- `src/cli/mod.rs` line 598: changed `"txt"` → `"all"`
+- `src/cli/mod.rs` line 614: copies `audio.json` → `content_dir/transcript.json`
 
-```rust
-// CURRENT (line 598):
-"txt",
-
-// CHANGE TO:
-"all",
-```
-
-This makes Whisper produce BOTH `audio.txt` (plain text) AND `audio.json` (word-level
-timestamps with start/end per segment). The JSON file should be copied to the library
-content directory as `transcript.json` alongside `transcript.txt`.
-
-**Where the JSON artifact should live:**
+**Library layout after ingest:**
 ```
 ~/AI/library/youtube/Title (ID)/
-  ├── transcript.txt      ← plain text (existing, for chunking + fabric patterns)
-  ├── transcript.json     ← NEW: Whisper JSON with word-level timestamps
+  ├── transcript.txt      ← plain text (for chunking + fabric patterns)
+  ├── transcript.json     ← Whisper JSON with word-level timestamps
   ├── metadata.json
   ├── wisdom.md
   └── keyframes/
-      └── index.json      ← keyframe index references transcript.json for correlation
+      └── index.json      ← --transcript flag can now use transcript.json
 ```
 
-**Why this matters**: With `transcript.json`, the `--transcript` flag gets precise
-word-level timestamps (33ms accuracy at 30fps) instead of the approximate timestamps
-from plain text word-count estimation. This makes keyframe-transcript correlation
-frame-accurate.
-
-**Implementation (3 lines in ingest_youtube()):**
-1. Change `"txt"` to `"all"` in Whisper args
-2. After transcription, also copy `audio.json` → `content_dir/transcript.json`
-3. Update `discover_artifacts()` to recognize `transcript.json`
+**Next durable step (if we return to keyframes later):**
+Use `transcript.json` with `--transcript` for frame-accurate correlation
+instead of the approximate timestamps from plain text word-count estimation.
+New videos ingested after this commit already have the JSON file.
 
 ## Scope Freeze
 
