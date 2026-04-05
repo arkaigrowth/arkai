@@ -10,6 +10,7 @@
 //! - `__web__`: Fetch web page content (uses `fabric -u <url>`)
 //! - All other actions are treated as pattern names (uses `fabric -p <pattern>`)
 
+use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -42,18 +43,14 @@ impl Default for FabricAdapter {
 impl FabricAdapter {
     /// Create a new Fabric adapter with default binary path
     ///
-    /// Looks for fabric-ai first (Homebrew install), falls back to fabric
+    /// Looks for a compatible Fabric AI CLI.
+    ///
+    /// Homebrew installs the AI CLI as `fabric-ai`, but that binary only
+    /// behaves correctly in fetch mode when argv[0] is `fabric`. We normalize
+    /// that internally and avoid falling back to unrelated tools like the
+    /// Python SSH utility also named `fabric`.
     pub fn new() -> Self {
-        // Try fabric-ai first (Homebrew install name), then fabric
-        let binary_path = if std::process::Command::new("fabric-ai")
-            .arg("--help")
-            .output()
-            .is_ok()
-        {
-            "fabric-ai".to_string()
-        } else {
-            "fabric".to_string()
-        };
+        let binary_path = Self::resolve_binary_path();
 
         Self { binary_path }
     }
@@ -63,6 +60,56 @@ impl FabricAdapter {
         Self {
             binary_path: binary_path.into(),
         }
+    }
+
+    fn resolve_binary_path() -> String {
+        if Self::supports_fabric_ai_cli("fabric-ai") {
+            return "fabric-ai".to_string();
+        }
+
+        if Self::supports_fabric_ai_cli("fabric") {
+            return "fabric".to_string();
+        }
+
+        // Prefer failing clearly on a missing/invalid AI Fabric binary over
+        // silently selecting the unrelated Python SSH tool named `fabric`.
+        "fabric-ai".to_string()
+    }
+
+    fn supports_fabric_ai_cli(candidate: &str) -> bool {
+        let Ok(output) = std::process::Command::new(candidate).arg("--help").output() else {
+            return false;
+        };
+
+        if !output.status.success() {
+            return false;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Self::looks_like_fabric_ai_help(&stdout) || Self::looks_like_fabric_ai_help(&stderr)
+    }
+
+    fn looks_like_fabric_ai_help(help: &str) -> bool {
+        help.contains("--pattern") && help.contains("--youtube") && help.contains("--scrape_url")
+    }
+
+    fn should_alias_argv0(binary_path: &str) -> bool {
+        Path::new(binary_path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == "fabric-ai")
+    }
+
+    fn command(&self) -> Command {
+        let mut command = Command::new(&self.binary_path);
+
+        #[cfg(unix)]
+        if Self::should_alias_argv0(&self.binary_path) {
+            command.arg0("fabric");
+        }
+
+        command
     }
 
     /// Execute a pattern via subprocess
@@ -75,7 +122,8 @@ impl FabricAdapter {
         input: &str,
         step_timeout: Duration,
     ) -> Result<String> {
-        let mut child = Command::new(&self.binary_path)
+        let mut child = self
+            .command()
             .args(["-p", pattern])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -129,7 +177,7 @@ impl FabricAdapter {
     async fn fetch_youtube(&self, url: &str, step_timeout: Duration) -> Result<String> {
         let output = timeout(
             step_timeout,
-            Command::new(&self.binary_path)
+            self.command()
                 .args(["-y", url, "--transcript-with-timestamps"])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -159,7 +207,7 @@ impl FabricAdapter {
     async fn fetch_web(&self, url: &str, step_timeout: Duration) -> Result<String> {
         let output = timeout(
             step_timeout,
-            Command::new(&self.binary_path)
+            self.command()
                 .args(["-u", url])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -213,7 +261,8 @@ impl Adapter for FabricAdapter {
 
     async fn health_check(&self) -> Result<()> {
         // Check that fabric is available and can list patterns
-        let output = Command::new(&self.binary_path)
+        let output = self
+            .command()
             .arg("-l")
             .output()
             .await
@@ -242,6 +291,25 @@ mod tests {
     async fn test_custom_binary_path() {
         let adapter = FabricAdapter::with_binary_path("/custom/path/fabric");
         assert_eq!(adapter.binary_path, "/custom/path/fabric");
+    }
+
+    #[test]
+    fn test_detects_fabric_ai_help_signature() {
+        let help = "Usage:\n  fabric-ai [OPTIONS]\n\n  -p, --pattern=\n  -y, --youtube=\n  -u, --scrape_url=\n";
+        assert!(FabricAdapter::looks_like_fabric_ai_help(help));
+    }
+
+    #[test]
+    fn test_rejects_non_ai_fabric_help_signature() {
+        let help = "Usage: fabric [OPTIONS] COMMAND [ARGS]...\n\nCommands:\n  run\n";
+        assert!(!FabricAdapter::looks_like_fabric_ai_help(help));
+    }
+
+    #[test]
+    fn test_aliases_homebrew_fabric_ai_process_name() {
+        assert!(FabricAdapter::should_alias_argv0("fabric-ai"));
+        assert!(FabricAdapter::should_alias_argv0("/opt/homebrew/bin/fabric-ai"));
+        assert!(!FabricAdapter::should_alias_argv0("fabric"));
     }
 
     // Note: Integration tests with actual Fabric would go in tests/
