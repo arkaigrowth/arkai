@@ -103,6 +103,13 @@ pub enum Commands {
     /// Show resolved configuration (debug)
     Config,
 
+    /// Show operator diagnostics
+    Doctor {
+        /// Output machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Search the library
     Search {
         /// Search query
@@ -276,6 +283,7 @@ impl Cli {
                 title,
             } => ingest_content(&url, content_type, tags, title).await,
             Commands::Config => show_config().await,
+            Commands::Doctor { json } => run_doctor(json).await,
             Commands::Library {
                 content_type,
                 limit,
@@ -442,6 +450,85 @@ async fn list_runs(limit: usize) -> Result<()> {
     Ok(())
 }
 
+async fn collect_doctor_report() -> Result<serde_json::Value> {
+    let generated_at = chrono::Utc::now().to_rfc3339();
+    let config = crate::config::config()?;
+    let fabric = FabricAdapter::new();
+    let diagnostics = fabric.binary_diagnostics();
+
+    let mut issues = Vec::new();
+    if !diagnostics.signature_passed {
+        issues.push(serde_json::json!({
+            "severity": "error",
+            "component": "fabric",
+            "message": diagnostics.error.as_deref().unwrap_or("Selected Fabric binary is incompatible"),
+        }));
+    }
+
+    let status = if issues.is_empty() { "ok" } else { "fail" };
+
+    Ok(serde_json::json!({
+        "schema_version": "arkai-doctor-v1",
+        "generated_at": generated_at,
+        "health": {
+            "status": status,
+            "issues": issues,
+        },
+        "paths": {
+            "home": config.home.display().to_string(),
+            "library": config.library.display().to_string(),
+            "config_file": config.config_file.as_ref().map(|path| path.display().to_string()),
+        },
+        "fabric": {
+            "requested_binary": diagnostics.requested_binary,
+            "selected_binary": diagnostics.selected_binary,
+            "selection_source": diagnostics.selection_source.as_str(),
+            "signature_passed": diagnostics.signature_passed,
+            "argv0_alias": diagnostics.argv0_alias,
+            "error": diagnostics.error,
+        }
+    }))
+}
+
+async fn run_doctor(json_output: bool) -> Result<()> {
+    let report = collect_doctor_report().await?;
+
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    println!("Arkai Doctor");
+    println!(
+        "Status: {}",
+        report["health"]["status"].as_str().unwrap_or("unknown")
+    );
+    println!(
+        "Fabric binary: {}",
+        report["fabric"]["selected_binary"]
+            .as_str()
+            .unwrap_or("<unknown>")
+    );
+    println!(
+        "Fabric source: {}",
+        report["fabric"]["selection_source"]
+            .as_str()
+            .unwrap_or("<unknown>")
+    );
+    println!(
+        "Fabric signature: {}",
+        report["fabric"]["signature_passed"]
+            .as_bool()
+            .unwrap_or(false)
+    );
+
+    if let Some(error) = report["fabric"]["error"].as_str() {
+        println!("Fabric error: {}", error);
+    }
+
+    Ok(())
+}
+
 /// Resume a failed run
 async fn resume_run(run_id_str: &str) -> Result<()> {
     let run_id =
@@ -527,6 +614,193 @@ mod atty {
         // This is a simplified version - in production, use the atty crate
         true
     }
+}
+
+/// Ingest YouTube content via yt-dlp audio download + Whisper transcription + fabric patterns.
+///
+/// This bypasses the broken `fabric -y` path (YouTube PO token blocks auto-captions)
+/// and uses the same pipeline that produced all existing library transcripts.
+///
+/// Self-contained: updates catalog, imports to store, computes embeddings, chunks transcripts.
+/// OpenClaw calls `arkai ingest <url> --content-type youtube` and gets back a fully indexed item.
+async fn ingest_youtube(url: &str, tags: Option<String>, title: Option<String>) -> Result<()> {
+    let yt_dlp = "/opt/homebrew/bin/yt-dlp";
+    let whisper_bin = "/opt/homebrew/bin/whisper";
+
+    eprintln!("Ingesting YouTube content...");
+
+    // 1. Get video metadata (yt-dlp --print avoids brittle URL parsing)
+    let video_id = run_cmd(yt_dlp, &["--print", "id", url])
+        .context("Failed to get video ID. Is yt-dlp installed at /opt/homebrew/bin/yt-dlp?")?;
+    let video_id = video_id.trim().to_string();
+
+    let yt_title = run_cmd(yt_dlp, &["--print", "title", url])
+        .context("Failed to get video title")?;
+    let yt_title = yt_title.trim().to_string();
+    let final_title = title.unwrap_or(yt_title);
+
+    eprintln!("  Title: {}", final_title);
+    eprintln!("  ID: {}", video_id);
+
+    // 2. Create LibraryContent (uses config-resolved paths)
+    let content = LibraryContent::new(url, &final_title, ContentType::YouTube);
+    let content_dir = content.content_dir()?;
+    std::fs::create_dir_all(&content_dir)?;
+
+    // 3. Download audio to temp dir
+    let work_dir = tempfile::tempdir()?;
+    let audio_out = work_dir.path().join("audio.%(ext)s");
+    eprintln!("  Downloading audio...");
+    run_cmd(
+        yt_dlp,
+        &[
+            "-x",
+            "--audio-format",
+            "mp3",
+            "--audio-quality",
+            "0",
+            "-o",
+            &audio_out.to_string_lossy(),
+            url,
+        ],
+    )
+    .context("yt-dlp audio download failed")?;
+
+    let audio_file = work_dir.path().join("audio.mp3");
+    anyhow::ensure!(
+        audio_file.exists(),
+        "Audio download failed — audio.mp3 not found in temp dir"
+    );
+
+    // 4. Transcribe with Whisper
+    eprintln!("  Transcribing with Whisper large-v3-turbo...");
+    run_cmd(
+        whisper_bin,
+        &[
+            &audio_file.to_string_lossy(),
+            "--model",
+            "large-v3-turbo",
+            "--output_format",
+            "all",
+            "--output_dir",
+            &work_dir.path().to_string_lossy(),
+        ],
+    )
+    .context("Whisper transcription failed")?;
+
+    let transcript = std::fs::read_to_string(work_dir.path().join("audio.txt"))
+        .context("Whisper transcription produced no output file")?;
+    let word_count = transcript.split_whitespace().count();
+    eprintln!("  Transcribed: {} words", word_count);
+
+    // 5. Write transcripts to content dir
+    std::fs::write(content_dir.join("transcript.txt"), &transcript)?;
+    // Copy Whisper JSON (word-level timestamps) if produced
+    let whisper_json = work_dir.path().join("audio.json");
+    if whisper_json.exists() {
+        std::fs::copy(&whisper_json, content_dir.join("transcript.json"))?;
+    }
+
+    // 6. Parse tags for metadata + catalog
+    let tag_list: Vec<String> = tags
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    // 7. Write metadata.json ONCE (do NOT call content.save_metadata() — it overwrites)
+    let yt_dlp_version = run_cmd(yt_dlp, &["--version"]).unwrap_or_default();
+    let metadata = serde_json::json!({
+        "id": video_id,
+        "title": final_title,
+        "url": url,
+        "source": "youtube",
+        "content_type": "YouTube",
+        "tags": tag_list,
+        "transcription_model": "whisper-large-v3-turbo",
+        "transcription_date": chrono::Utc::now().format("%Y-%m-%d").to_string(),
+        "word_count": word_count,
+        "has_video": false,
+        "pipeline": {
+            "download": format!("yt-dlp {}", yt_dlp_version.trim()),
+            "transcription": "openai-whisper large-v3-turbo"
+        }
+    });
+    std::fs::write(
+        content_dir.join("metadata.json"),
+        serde_json::to_string_pretty(&metadata)?,
+    )?;
+
+    // 8. Run fabric patterns (graceful degradation if any pattern fails)
+    let fabric_adapter = FabricAdapter::new();
+    let fabric_timeout = std::time::Duration::from_secs(180);
+    for (pattern, output_file) in [
+        ("video_to_wisdom", "wisdom.md"),
+        ("summarize", "summary.md"),
+        ("extract_claims", "claims.json"),
+    ] {
+        eprintln!("  Running fabric {}...", pattern);
+        match fabric_adapter
+            .execute(pattern, &transcript, fabric_timeout)
+            .await
+        {
+            Ok(output) if !output.content.trim().is_empty() => {
+                std::fs::write(content_dir.join(output_file), &output.content)?;
+            }
+            Ok(_) => eprintln!("  WARNING: {} returned empty output", pattern),
+            Err(e) => eprintln!("  WARNING: {} failed: {} (non-fatal)", pattern, e),
+        }
+    }
+
+    // 9. Update catalog (preserving existing bookkeeping)
+    let mut catalog = Catalog::load().await?;
+    let mut item = CatalogItem::new(url, &final_title, ContentType::YouTube);
+    if !tag_list.is_empty() {
+        item = item.with_tags(tag_list);
+    }
+    for name in ["transcript.txt", "wisdom.md", "summary.md", "claims.json"] {
+        if content_dir.join(name).exists() {
+            item = item.with_artifact(name.to_string());
+        }
+    }
+    catalog.add(item);
+    catalog.save().await?;
+
+    // 10. Import to store + chunk + embed (SELF-CONTAINED)
+    eprintln!("  Importing to store + computing embeddings + chunking...");
+    let db_path = crate::store::StoreConfig::default_path()?;
+    let store = crate::store::Store::open(&db_path)?;
+    let lib_path = crate::config::config()?.library.clone();
+    crate::store::import::import_library_metadata(&store, &lib_path)?;
+    compute_embeddings_for_store(&store).await?;
+    chunk_and_embed_transcripts(&store).await?;
+
+    eprintln!("\nYouTube content ingested and indexed!");
+    eprintln!("  Title: {}", final_title);
+    eprintln!("  Words: {}", word_count);
+    eprintln!("  Library: {}", content_dir.display());
+
+    Ok(())
+}
+
+/// Run a command, return stdout. Fails clearly with command name + exit code + stderr.
+fn run_cmd(cmd: &str, args: &[&str]) -> Result<String> {
+    let output = std::process::Command::new(cmd)
+        .args(args)
+        .output()
+        .with_context(|| format!("Failed to run: {} {}", cmd, args.join(" ")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "{} failed (exit {}): {}",
+            cmd,
+            output.status,
+            stderr.trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 /// Detect content type from URL
@@ -649,9 +923,14 @@ async fn ingest_content(
         .map(ContentType::from)
         .unwrap_or_else(|| detect_content_type(url));
 
+    // YouTube: use audio download + Whisper (fabric -y is broken due to PO token)
+    if matches!(ct, ContentType::YouTube) {
+        return ingest_youtube(url, tags, title).await;
+    }
+
     eprintln!("📥 Ingesting {} content from: {}", ct, url);
 
-    // Create dynamic pipeline for ingestion
+    // Create dynamic pipeline for ingestion (web and other content types)
     let pipeline = create_ingest_pipeline(ct);
 
     // Run the pipeline with URL as input
