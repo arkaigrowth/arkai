@@ -142,9 +142,11 @@ fn is_abbreviation(text: &str, period_pos: usize) -> bool {
     false
 }
 
-/// Split text into sentences. Returns a list of (sentence_text, byte_start, byte_end).
+/// Split text into segments. Returns a list of (segment_text, byte_start, byte_end).
 ///
-/// Sentence boundaries: `. ` | `? ` | `! ` | `.\n` | `?\n` | `!\n`
+/// Primary boundaries: `. ` | `? ` | `! ` | `.\n` | `?\n` | `!\n`
+/// Fallback: if no punctuation boundaries found (common in Whisper transcripts
+/// without punctuation), falls back to newline-based splitting.
 /// Excludes boundaries inside abbreviations and decimal numbers.
 fn split_sentences(text: &str) -> Vec<(&str, usize, usize)> {
     if text.is_empty() {
@@ -223,6 +225,39 @@ fn split_sentences(text: &str) -> Vec<(&str, usize, usize)> {
             let trim_start = start + remaining.find(trimmed).unwrap_or(0);
             let trim_end = trim_start + trimmed.len();
             sentences.push((trimmed, trim_start, trim_end));
+        }
+    }
+
+    // FALLBACK: If punctuation-based splitting produced 0 or 1 segments but the
+    // text has newlines, fall back to newline-based splitting. This handles Whisper
+    // transcripts that output without punctuation (common with large-v3-turbo on
+    // casual/conversational speech).
+    if sentences.len() <= 1 && text.contains('\n') {
+        let mut line_segments = Vec::new();
+        let mut line_start = 0;
+        for (i, b) in bytes.iter().enumerate() {
+            if *b == b'\n' {
+                let line = &text[line_start..i];
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    let trim_offset = line_start + line.find(trimmed).unwrap_or(0);
+                    line_segments.push((trimmed, trim_offset, trim_offset + trimmed.len()));
+                }
+                line_start = i + 1;
+            }
+        }
+        // Don't forget trailing content after last newline
+        if line_start < len {
+            let line = &text[line_start..];
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
+                let trim_offset = line_start + line.find(trimmed).unwrap_or(0);
+                line_segments.push((trimmed, trim_offset, trim_offset + trimmed.len()));
+            }
+        }
+        // Only use newline fallback if it produces more segments
+        if line_segments.len() > sentences.len() {
+            return line_segments;
         }
     }
 
