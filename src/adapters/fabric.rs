@@ -6,7 +6,7 @@
 //! # Special Actions
 //!
 //! The adapter supports special action prefixes for content fetching:
-//! - `__youtube__`: Fetch YouTube transcript with timestamps (uses `fabric -y <url> --transcript-with-timestamps`)
+//! - `__youtube__`: Fetch YouTube transcript via yt-dlp audio + Whisper
 //! - `__web__`: Fetch web page content (uses `fabric -u <url>`)
 //! - All other actions are treated as pattern names (uses `fabric -p <pattern>`)
 
@@ -394,36 +394,27 @@ impl FabricAdapter {
         Ok(stdout)
     }
 
-    /// Fetch YouTube transcript via fabric -y <url> --transcript-with-timestamps
-    async fn fetch_youtube(&self, url: &str, step_timeout: Duration) -> Result<String> {
+    /// Fetch YouTube transcript via the durable yt-dlp audio + Whisper path.
+    async fn fetch_youtube(&self, url: &str, step_timeout: Duration) -> Result<AdapterOutput> {
         self.ensure_compatible()?;
 
-        let output = timeout(
+        let transcript = timeout(
             step_timeout,
-            self.command()
-                .args(["-y", url, "--transcript-with-timestamps"])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output(),
+            crate::ingest::youtube::acquire_youtube_transcript(url),
         )
         .await
         .with_context(|| format!("YouTube fetch timed out for URL: {}", url))?
         .with_context(|| format!("Failed to fetch YouTube content from: {}", url))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let exit_code = output.status.code().unwrap_or(-1);
-            anyhow::bail!(
-                "YouTube fetch failed with exit code {}: {}",
-                exit_code,
-                stderr.trim()
-            );
+        let transcript_text = transcript.transcript;
+        let mut output = AdapterOutput::new(transcript_text.clone())
+            .with_artifact("transcript.txt", transcript_text);
+
+        if let Some(transcript_json) = transcript.transcript_json {
+            output = output.with_artifact("transcript.json", transcript_json);
         }
 
-        let stdout =
-            String::from_utf8(output.stdout).context("YouTube transcript is not valid UTF-8")?;
-
-        Ok(stdout)
+        Ok(output)
     }
 
     /// Fetch web page content via fabric -u <url>
@@ -466,22 +457,22 @@ impl Adapter for FabricAdapter {
 
     async fn execute(&self, action: &str, input: &str, timeout: Duration) -> Result<AdapterOutput> {
         // Handle special actions for content fetching
-        let content = match action {
+        let output = match action {
             ACTION_YOUTUBE => {
                 // Input is the YouTube URL
                 self.fetch_youtube(input, timeout).await?
             }
             ACTION_WEB => {
                 // Input is the web URL
-                self.fetch_web(input, timeout).await?
+                AdapterOutput::new(self.fetch_web(input, timeout).await?)
             }
             _ => {
                 // Standard pattern execution
-                self.execute_subprocess(action, input, timeout).await?
+                AdapterOutput::new(self.execute_subprocess(action, input, timeout).await?)
             }
         };
 
-        Ok(AdapterOutput::new(content))
+        Ok(output)
     }
 
     async fn health_check(&self) -> Result<()> {

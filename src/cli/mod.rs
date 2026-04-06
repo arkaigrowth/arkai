@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use crate::adapters::{Adapter, FabricAdapter, ACTION_WEB, ACTION_YOUTUBE};
 use crate::core::{Orchestrator, Pipeline};
+use crate::ingest::youtube::acquire_youtube_transcript_with;
 use crate::library::{Catalog, CatalogItem, ContentType, LibraryContent};
 
 pub mod capture;
@@ -647,61 +648,19 @@ async fn ingest_youtube(url: &str, tags: Option<String>, title: Option<String>) 
     let content_dir = content.content_dir()?;
     std::fs::create_dir_all(&content_dir)?;
 
-    // 3. Download audio to temp dir
-    let work_dir = tempfile::tempdir()?;
-    let audio_out = work_dir.path().join("audio.%(ext)s");
+    // 3. Download audio + transcribe with Whisper via the durable shared path
     eprintln!("  Downloading audio...");
-    run_cmd(
-        yt_dlp,
-        &[
-            "-x",
-            "--audio-format",
-            "mp3",
-            "--audio-quality",
-            "0",
-            "-o",
-            &audio_out.to_string_lossy(),
-            url,
-        ],
-    )
-    .context("yt-dlp audio download failed")?;
-
-    let audio_file = work_dir.path().join("audio.mp3");
-    anyhow::ensure!(
-        audio_file.exists(),
-        "Audio download failed — audio.mp3 not found in temp dir"
-    );
-
-    // 4. Transcribe with Whisper
     eprintln!("  Transcribing with Whisper large-v3-turbo...");
-    run_cmd(
-        whisper_bin,
-        &[
-            &audio_file.to_string_lossy(),
-            "--model",
-            "large-v3-turbo",
-            "--output_format",
-            "all",
-            "--output_dir",
-            &work_dir.path().to_string_lossy(),
-        ],
-    )
-    .context("Whisper transcription failed")?;
-
-    let transcript = std::fs::read_to_string(work_dir.path().join("audio.txt"))
-        .context("Whisper transcription produced no output file")?;
-    let word_count = transcript.split_whitespace().count();
+    let transcript_artifacts =
+        acquire_youtube_transcript_with(url, yt_dlp, whisper_bin, "large-v3-turbo").await?;
+    let transcript = transcript_artifacts.transcript.clone();
+    let word_count = transcript_artifacts.word_count();
     eprintln!("  Transcribed: {} words", word_count);
 
-    // 5. Write transcripts to content dir
-    std::fs::write(content_dir.join("transcript.txt"), &transcript)?;
-    // Copy Whisper JSON (word-level timestamps) if produced
-    let whisper_json = work_dir.path().join("audio.json");
-    if whisper_json.exists() {
-        std::fs::copy(&whisper_json, content_dir.join("transcript.json"))?;
-    }
+    // 4. Write transcripts to content dir
+    transcript_artifacts.persist_to_dir(&content_dir)?;
 
-    // 6. Parse tags for metadata + catalog
+    // 5. Parse tags for metadata + catalog
     let tag_list: Vec<String> = tags
         .as_deref()
         .unwrap_or("")
@@ -710,7 +669,7 @@ async fn ingest_youtube(url: &str, tags: Option<String>, title: Option<String>) 
         .filter(|s| !s.is_empty())
         .collect();
 
-    // 7. Write metadata.json ONCE (do NOT call content.save_metadata() — it overwrites)
+    // 6. Write metadata.json ONCE (do NOT call content.save_metadata() — it overwrites)
     let yt_dlp_version = run_cmd(yt_dlp, &["--version"]).unwrap_or_default();
     let metadata = serde_json::json!({
         "id": video_id,
@@ -733,7 +692,7 @@ async fn ingest_youtube(url: &str, tags: Option<String>, title: Option<String>) 
         serde_json::to_string_pretty(&metadata)?,
     )?;
 
-    // 8. Run fabric patterns (graceful degradation if any pattern fails)
+    // 7. Run fabric patterns (graceful degradation if any pattern fails)
     let fabric_adapter = FabricAdapter::new();
     let fabric_timeout = std::time::Duration::from_secs(180);
     for (pattern, output_file) in [
@@ -754,13 +713,19 @@ async fn ingest_youtube(url: &str, tags: Option<String>, title: Option<String>) 
         }
     }
 
-    // 9. Update catalog (preserving existing bookkeeping)
+    // 8. Update catalog (preserving existing bookkeeping)
     let mut catalog = Catalog::load().await?;
     let mut item = CatalogItem::new(url, &final_title, ContentType::YouTube);
     if !tag_list.is_empty() {
         item = item.with_tags(tag_list);
     }
-    for name in ["transcript.txt", "wisdom.md", "summary.md", "claims.json"] {
+    for name in [
+        "transcript.txt",
+        "transcript.json",
+        "wisdom.md",
+        "summary.md",
+        "claims.json",
+    ] {
         if content_dir.join(name).exists() {
             item = item.with_artifact(name.to_string());
         }
@@ -768,7 +733,7 @@ async fn ingest_youtube(url: &str, tags: Option<String>, title: Option<String>) 
     catalog.add(item);
     catalog.save().await?;
 
-    // 10. Import to store + chunk + embed (SELF-CONTAINED)
+    // 9. Import to store + chunk + embed (SELF-CONTAINED)
     eprintln!("  Importing to store + computing embeddings + chunking...");
     let db_path = crate::store::StoreConfig::default_path()?;
     let store = crate::store::Store::open(&db_path)?;
