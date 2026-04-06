@@ -10,7 +10,7 @@
 //! - `__web__`: Fetch web page content (uses `fabric -u <url>`)
 //! - All other actions are treated as pattern names (uses `fabric -p <pattern>`)
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -21,6 +21,7 @@ use tokio::process::Command;
 use tokio::time::timeout;
 
 use super::{Adapter, AdapterOutput};
+use crate::config::{self, FabricBinaryOverrideSource};
 
 /// Special action for fetching YouTube transcripts
 pub const ACTION_YOUTUBE: &str = "__youtube__";
@@ -28,10 +29,53 @@ pub const ACTION_YOUTUBE: &str = "__youtube__";
 /// Special action for fetching web page content
 pub const ACTION_WEB: &str = "__web__";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FabricBinarySelectionSource {
+    EnvOverride,
+    ConfigOverride,
+    ExplicitArgument,
+    AutoPathFabricAi,
+    AutoPathFabric,
+    AutoFallback,
+    ConfigError,
+}
+
+impl FabricBinarySelectionSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::EnvOverride => "env_override",
+            Self::ConfigOverride => "config_override",
+            Self::ExplicitArgument => "explicit_argument",
+            Self::AutoPathFabricAi => "auto_path_fabric_ai",
+            Self::AutoPathFabric => "auto_path_fabric",
+            Self::AutoFallback => "auto_fallback",
+            Self::ConfigError => "config_error",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FabricBinaryDiagnostics {
+    pub requested_binary: Option<String>,
+    pub selected_binary: String,
+    pub selection_source: FabricBinarySelectionSource,
+    pub signature_passed: bool,
+    pub argv0_alias: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct CandidateProbe {
+    selected_binary: String,
+    signature_passed: bool,
+    error: Option<String>,
+}
+
 /// Fabric adapter using subprocess mode
 pub struct FabricAdapter {
     /// Path to the fabric binary (default: "fabric")
     binary_path: String,
+    diagnostics: FabricBinaryDiagnostics,
 }
 
 impl Default for FabricAdapter {
@@ -50,44 +94,206 @@ impl FabricAdapter {
     /// that internally and avoid falling back to unrelated tools like the
     /// Python SSH utility also named `fabric`.
     pub fn new() -> Self {
-        let binary_path = Self::resolve_binary_path();
+        let diagnostics = Self::resolve_binary_diagnostics();
+        let binary_path = diagnostics.selected_binary.clone();
 
-        Self { binary_path }
+        Self {
+            binary_path,
+            diagnostics,
+        }
     }
 
     /// Create a Fabric adapter with a custom binary path
     pub fn with_binary_path(binary_path: impl Into<String>) -> Self {
+        let diagnostics = Self::resolve_explicit_binary(
+            binary_path.into(),
+            FabricBinarySelectionSource::ExplicitArgument,
+        );
         Self {
-            binary_path: binary_path.into(),
+            binary_path: diagnostics.selected_binary.clone(),
+            diagnostics,
         }
     }
 
-    fn resolve_binary_path() -> String {
-        if Self::supports_fabric_ai_cli("fabric-ai") {
-            return "fabric-ai".to_string();
-        }
-
-        if Self::supports_fabric_ai_cli("fabric") {
-            return "fabric".to_string();
-        }
-
-        // Prefer failing clearly on a missing/invalid AI Fabric binary over
-        // silently selecting the unrelated Python SSH tool named `fabric`.
-        "fabric-ai".to_string()
+    pub fn binary_diagnostics(&self) -> &FabricBinaryDiagnostics {
+        &self.diagnostics
     }
 
-    fn supports_fabric_ai_cli(candidate: &str) -> bool {
-        let Ok(output) = std::process::Command::new(candidate).arg("--help").output() else {
-            return false;
+    fn resolve_binary_diagnostics() -> FabricBinaryDiagnostics {
+        match config::fabric_binary_override() {
+            Ok(Some(binary_override)) => {
+                let source = match binary_override.source {
+                    FabricBinaryOverrideSource::Env => FabricBinarySelectionSource::EnvOverride,
+                    FabricBinaryOverrideSource::Config => {
+                        FabricBinarySelectionSource::ConfigOverride
+                    }
+                };
+                Self::resolve_explicit_binary(binary_override.value, source)
+            }
+            Ok(None) => {
+                let fabric_ai_probe = Self::probe_candidate("fabric-ai");
+                if fabric_ai_probe.signature_passed {
+                    return Self::diagnostics_from_probe(
+                        None,
+                        FabricBinarySelectionSource::AutoPathFabricAi,
+                        fabric_ai_probe,
+                    );
+                }
+
+                let fabric_probe = Self::probe_candidate("fabric");
+                if fabric_probe.signature_passed {
+                    return Self::diagnostics_from_probe(
+                        None,
+                        FabricBinarySelectionSource::AutoPathFabric,
+                        fabric_probe,
+                    );
+                }
+
+                let selected_binary = fabric_ai_probe.selected_binary.clone();
+                let error = format!(
+                    "No compatible AI Fabric CLI found. Checked {} and {}. Set ARKAI_FABRIC_BIN or `fabric.binary` to override. {} {}",
+                    fabric_ai_probe.selected_binary,
+                    fabric_probe.selected_binary,
+                    fabric_ai_probe.error.as_deref().unwrap_or(""),
+                    fabric_probe.error.as_deref().unwrap_or("")
+                )
+                .trim()
+                .to_string();
+
+                FabricBinaryDiagnostics {
+                    requested_binary: None,
+                    selected_binary: selected_binary.clone(),
+                    selection_source: FabricBinarySelectionSource::AutoFallback,
+                    signature_passed: false,
+                    argv0_alias: Self::should_alias_argv0(&selected_binary),
+                    error: Some(error),
+                }
+            }
+            Err(error) => {
+                let selected_binary = "fabric-ai".to_string();
+                FabricBinaryDiagnostics {
+                    requested_binary: None,
+                    selected_binary: selected_binary.clone(),
+                    selection_source: FabricBinarySelectionSource::ConfigError,
+                    signature_passed: false,
+                    argv0_alias: Self::should_alias_argv0(&selected_binary),
+                    error: Some(format!(
+                        "Failed to load Arkai config while resolving Fabric binary: {}",
+                        error
+                    )),
+                }
+            }
+        }
+    }
+
+    fn resolve_explicit_binary(
+        binary_path: String,
+        source: FabricBinarySelectionSource,
+    ) -> FabricBinaryDiagnostics {
+        let probe = Self::probe_candidate(&binary_path);
+        Self::diagnostics_from_probe(Some(binary_path), source, probe)
+    }
+
+    fn diagnostics_from_probe(
+        requested_binary: Option<String>,
+        source: FabricBinarySelectionSource,
+        probe: CandidateProbe,
+    ) -> FabricBinaryDiagnostics {
+        FabricBinaryDiagnostics {
+            requested_binary,
+            argv0_alias: Self::should_alias_argv0(&probe.selected_binary),
+            selected_binary: probe.selected_binary,
+            selection_source: source,
+            signature_passed: probe.signature_passed,
+            error: probe.error,
+        }
+    }
+
+    fn probe_candidate(candidate: &str) -> CandidateProbe {
+        let selected_binary =
+            Self::resolve_candidate_path(candidate).unwrap_or_else(|| candidate.to_string());
+
+        let output = std::process::Command::new(&selected_binary)
+            .arg("--help")
+            .output();
+
+        let output = match output {
+            Ok(output) => output,
+            Err(error) => {
+                return CandidateProbe {
+                    selected_binary,
+                    signature_passed: false,
+                    error: Some(format!("Failed to run '{} --help': {}", candidate, error)),
+                };
+            }
         };
 
         if !output.status.success() {
-            return false;
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let exit_code = output.status.code().unwrap_or(-1);
+            return CandidateProbe {
+                selected_binary,
+                signature_passed: false,
+                error: Some(format!(
+                    "'{} --help' failed with exit code {}: {}",
+                    candidate,
+                    exit_code,
+                    stderr.trim()
+                )),
+            };
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Self::looks_like_fabric_ai_help(&stdout) || Self::looks_like_fabric_ai_help(&stderr)
+        let signature_passed =
+            Self::looks_like_fabric_ai_help(&stdout) || Self::looks_like_fabric_ai_help(&stderr);
+
+        let error = if signature_passed {
+            None
+        } else {
+            Some(format!(
+                "Selected Fabric binary '{}' is incompatible: expected AI Fabric CLI help signature containing --pattern, --youtube, and --scrape_url",
+                selected_binary
+            ))
+        };
+
+        CandidateProbe {
+            selected_binary,
+            signature_passed,
+            error,
+        }
+    }
+
+    fn resolve_candidate_path(candidate: &str) -> Option<String> {
+        let path = Path::new(candidate);
+        let looks_like_path = path.is_absolute()
+            || candidate.starts_with('.')
+            || candidate.contains(std::path::MAIN_SEPARATOR);
+
+        if looks_like_path {
+            let resolved = if path.is_absolute() {
+                PathBuf::from(path)
+            } else {
+                std::env::current_dir().ok()?.join(path)
+            };
+            return Some(
+                resolved
+                    .canonicalize()
+                    .unwrap_or(resolved)
+                    .display()
+                    .to_string(),
+            );
+        }
+
+        let path_var = std::env::var_os("PATH")?;
+        for dir in std::env::split_paths(&path_var) {
+            let full_path = dir.join(candidate);
+            if full_path.is_file() {
+                return Some(full_path.display().to_string());
+            }
+        }
+
+        None
     }
 
     fn looks_like_fabric_ai_help(help: &str) -> bool {
@@ -99,6 +305,19 @@ impl FabricAdapter {
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| name == "fabric-ai")
+    }
+
+    fn ensure_compatible(&self) -> Result<()> {
+        if self.diagnostics.signature_passed {
+            return Ok(());
+        }
+
+        anyhow::bail!(
+            "{}",
+            self.diagnostics.error.as_deref().unwrap_or(
+                "Selected Fabric binary is incompatible with Arkai's AI Fabric integration"
+            )
+        )
     }
 
     fn command(&self) -> Command {
@@ -122,6 +341,8 @@ impl FabricAdapter {
         input: &str,
         step_timeout: Duration,
     ) -> Result<String> {
+        self.ensure_compatible()?;
+
         let mut child = self
             .command()
             .args(["-p", pattern])
@@ -175,6 +396,8 @@ impl FabricAdapter {
 
     /// Fetch YouTube transcript via fabric -y <url> --transcript-with-timestamps
     async fn fetch_youtube(&self, url: &str, step_timeout: Duration) -> Result<String> {
+        self.ensure_compatible()?;
+
         let output = timeout(
             step_timeout,
             self.command()
@@ -205,6 +428,8 @@ impl FabricAdapter {
 
     /// Fetch web page content via fabric -u <url>
     async fn fetch_web(&self, url: &str, step_timeout: Duration) -> Result<String> {
+        self.ensure_compatible()?;
+
         let output = timeout(
             step_timeout,
             self.command()
@@ -260,6 +485,8 @@ impl Adapter for FabricAdapter {
     }
 
     async fn health_check(&self) -> Result<()> {
+        self.ensure_compatible()?;
+
         // Check that fabric is available and can list patterns
         let output = self
             .command()
@@ -280,6 +507,18 @@ impl Adapter for FabricAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use tempfile::TempDir;
+
+    fn write_executable(dir: &TempDir, name: &str, script: &str) -> PathBuf {
+        let path = dir.path().join(name);
+        fs::write(&path, script).unwrap();
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&path, permissions).unwrap();
+        path
+    }
 
     #[tokio::test]
     async fn test_fabric_adapter_creation() {
@@ -291,6 +530,7 @@ mod tests {
     async fn test_custom_binary_path() {
         let adapter = FabricAdapter::with_binary_path("/custom/path/fabric");
         assert_eq!(adapter.binary_path, "/custom/path/fabric");
+        assert!(!adapter.binary_diagnostics().signature_passed);
     }
 
     #[test]
@@ -308,8 +548,61 @@ mod tests {
     #[test]
     fn test_aliases_homebrew_fabric_ai_process_name() {
         assert!(FabricAdapter::should_alias_argv0("fabric-ai"));
-        assert!(FabricAdapter::should_alias_argv0("/opt/homebrew/bin/fabric-ai"));
+        assert!(FabricAdapter::should_alias_argv0(
+            "/opt/homebrew/bin/fabric-ai"
+        ));
         assert!(!FabricAdapter::should_alias_argv0("fabric"));
+    }
+
+    #[test]
+    fn test_explicit_binary_accepts_compatible_ai_fabric_help() {
+        let dir = TempDir::new().unwrap();
+        let binary = write_executable(
+            &dir,
+            "fabric-ai",
+            r#"#!/bin/sh
+if [ "$1" = "--help" ]; then
+  printf '%s\n' '--pattern --youtube --scrape_url'
+  exit 0
+fi
+exit 0
+"#,
+        );
+
+        let adapter = FabricAdapter::with_binary_path(binary.to_string_lossy());
+        let diagnostics = adapter.binary_diagnostics();
+
+        assert!(diagnostics.signature_passed);
+        assert_eq!(
+            diagnostics.selection_source,
+            FabricBinarySelectionSource::ExplicitArgument
+        );
+    }
+
+    #[test]
+    fn test_explicit_binary_rejects_incompatible_help() {
+        let dir = TempDir::new().unwrap();
+        let binary = write_executable(
+            &dir,
+            "fabric",
+            r#"#!/bin/sh
+if [ "$1" = "--help" ]; then
+  printf '%s\n' 'Usage: fabric run'
+  exit 0
+fi
+exit 0
+"#,
+        );
+
+        let adapter = FabricAdapter::with_binary_path(binary.to_string_lossy());
+        let diagnostics = adapter.binary_diagnostics();
+
+        assert!(!diagnostics.signature_passed);
+        assert!(diagnostics
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("incompatible"));
     }
 
     // Note: Integration tests with actual Fabric would go in tests/
