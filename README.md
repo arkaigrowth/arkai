@@ -69,6 +69,30 @@ arkai search "transformers"
 
 ---
 
+## Fabric Binary Override
+
+If Arkai picks the wrong `fabric` on your host, override it explicitly:
+
+```bash
+export ARKAI_FABRIC_BIN=/opt/homebrew/bin/fabric-ai
+arkai doctor --json
+```
+
+Or set it in `.arkai/config.yaml`:
+
+```yaml
+fabric:
+  binary: /opt/homebrew/bin/fabric-ai
+```
+
+Verify the selected binary with:
+
+```bash
+arkai doctor --json
+```
+
+---
+
 ## 🤔 Why arkai?
 
 | Without arkai | With arkai |
