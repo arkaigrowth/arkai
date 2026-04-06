@@ -103,6 +103,13 @@ pub enum Commands {
     /// Show resolved configuration (debug)
     Config,
 
+    /// Show operator diagnostics
+    Doctor {
+        /// Output machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Search the library
     Search {
         /// Search query
@@ -276,6 +283,7 @@ impl Cli {
                 title,
             } => ingest_content(&url, content_type, tags, title).await,
             Commands::Config => show_config().await,
+            Commands::Doctor { json } => run_doctor(json).await,
             Commands::Library {
                 content_type,
                 limit,
@@ -442,6 +450,85 @@ async fn list_runs(limit: usize) -> Result<()> {
     Ok(())
 }
 
+async fn collect_doctor_report() -> Result<serde_json::Value> {
+    let generated_at = chrono::Utc::now().to_rfc3339();
+    let config = crate::config::config()?;
+    let fabric = FabricAdapter::new();
+    let diagnostics = fabric.binary_diagnostics();
+
+    let mut issues = Vec::new();
+    if !diagnostics.signature_passed {
+        issues.push(serde_json::json!({
+            "severity": "error",
+            "component": "fabric",
+            "message": diagnostics.error.as_deref().unwrap_or("Selected Fabric binary is incompatible"),
+        }));
+    }
+
+    let status = if issues.is_empty() { "ok" } else { "fail" };
+
+    Ok(serde_json::json!({
+        "schema_version": "arkai-doctor-v1",
+        "generated_at": generated_at,
+        "health": {
+            "status": status,
+            "issues": issues,
+        },
+        "paths": {
+            "home": config.home.display().to_string(),
+            "library": config.library.display().to_string(),
+            "config_file": config.config_file.as_ref().map(|path| path.display().to_string()),
+        },
+        "fabric": {
+            "requested_binary": diagnostics.requested_binary,
+            "selected_binary": diagnostics.selected_binary,
+            "selection_source": diagnostics.selection_source.as_str(),
+            "signature_passed": diagnostics.signature_passed,
+            "argv0_alias": diagnostics.argv0_alias,
+            "error": diagnostics.error,
+        }
+    }))
+}
+
+async fn run_doctor(json_output: bool) -> Result<()> {
+    let report = collect_doctor_report().await?;
+
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    println!("Arkai Doctor");
+    println!(
+        "Status: {}",
+        report["health"]["status"].as_str().unwrap_or("unknown")
+    );
+    println!(
+        "Fabric binary: {}",
+        report["fabric"]["selected_binary"]
+            .as_str()
+            .unwrap_or("<unknown>")
+    );
+    println!(
+        "Fabric source: {}",
+        report["fabric"]["selection_source"]
+            .as_str()
+            .unwrap_or("<unknown>")
+    );
+    println!(
+        "Fabric signature: {}",
+        report["fabric"]["signature_passed"]
+            .as_bool()
+            .unwrap_or(false)
+    );
+
+    if let Some(error) = report["fabric"]["error"].as_str() {
+        println!("Fabric error: {}", error);
+    }
+
+    Ok(())
+}
+
 /// Resume a failed run
 async fn resume_run(run_id_str: &str) -> Result<()> {
     let run_id =
@@ -539,7 +626,6 @@ mod atty {
 async fn ingest_youtube(url: &str, tags: Option<String>, title: Option<String>) -> Result<()> {
     let yt_dlp = "/opt/homebrew/bin/yt-dlp";
     let whisper_bin = "/opt/homebrew/bin/whisper";
-    let fabric = "/opt/homebrew/bin/fabric-ai";
 
     eprintln!("Ingesting YouTube content...");
 
@@ -648,15 +734,20 @@ async fn ingest_youtube(url: &str, tags: Option<String>, title: Option<String>) 
     )?;
 
     // 8. Run fabric patterns (graceful degradation if any pattern fails)
+    let fabric_adapter = FabricAdapter::new();
+    let fabric_timeout = std::time::Duration::from_secs(180);
     for (pattern, output_file) in [
         ("video_to_wisdom", "wisdom.md"),
         ("summarize", "summary.md"),
         ("extract_claims", "claims.json"),
     ] {
         eprintln!("  Running fabric {}...", pattern);
-        match run_cmd_stdin(fabric, &["-p", pattern], &transcript) {
-            Ok(output) if !output.trim().is_empty() => {
-                std::fs::write(content_dir.join(output_file), &output)?;
+        match fabric_adapter
+            .execute(pattern, &transcript, fabric_timeout)
+            .await
+        {
+            Ok(output) if !output.content.trim().is_empty() => {
+                std::fs::write(content_dir.join(output_file), &output.content)?;
             }
             Ok(_) => eprintln!("  WARNING: {} returned empty output", pattern),
             Err(e) => eprintln!("  WARNING: {} failed: {} (non-fatal)", pattern, e),
@@ -700,36 +791,6 @@ fn run_cmd(cmd: &str, args: &[&str]) -> Result<String> {
         .args(args)
         .output()
         .with_context(|| format!("Failed to run: {} {}", cmd, args.join(" ")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!(
-            "{} failed (exit {}): {}",
-            cmd,
-            output.status,
-            stderr.trim()
-        );
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-}
-
-/// Run a command with stdin piped, return stdout.
-fn run_cmd_stdin(cmd: &str, args: &[&str], stdin_data: &str) -> Result<String> {
-    use std::io::Write;
-    let mut child = std::process::Command::new(cmd)
-        .args(args)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .with_context(|| format!("Failed to spawn: {} {}", cmd, args.join(" ")))?;
-
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(stdin_data.as_bytes())?;
-
-    let output = child.wait_with_output()?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!(

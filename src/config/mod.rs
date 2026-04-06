@@ -1,7 +1,7 @@
 //! Configuration for arkai paths.
 //!
 //! Configuration sources (highest priority first):
-//! 1. Environment variables (ARKAI_HOME, ARKAI_LIBRARY)
+//! 1. Environment variables (ARKAI_HOME, ARKAI_LIBRARY, ARKAI_FABRIC_BIN)
 //! 2. Config file (.arkai/config.yaml)
 //! 3. Defaults (~/.arkai)
 //!
@@ -54,8 +54,30 @@ pub struct PathsConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct FabricConfig {
+    pub binary: Option<String>,
     pub patterns_dir: Option<String>,
     pub custom_patterns: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FabricBinaryOverrideSource {
+    Env,
+    Config,
+}
+
+impl FabricBinaryOverrideSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Env => "env",
+            Self::Config => "config",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FabricBinaryOverride {
+    pub value: String,
+    pub source: FabricBinaryOverrideSource,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -74,6 +96,8 @@ pub struct ResolvedConfig {
     pub library: PathBuf,
     /// Content type to subdirectory mapping
     pub content_types: HashMap<String, String>,
+    /// Optional explicit Fabric binary override from env/config
+    pub fabric_binary: Option<FabricBinaryOverride>,
     /// Path to config file (if found)
     pub config_file: Option<PathBuf>,
     /// Safety settings
@@ -154,6 +178,40 @@ fn resolve_path(base: &Path, path_str: &str) -> PathBuf {
     }
 }
 
+fn resolve_command_value(base: &Path, value: &str) -> String {
+    let looks_like_path = Path::new(value).is_absolute()
+        || value.starts_with('.')
+        || value.contains(std::path::MAIN_SEPARATOR);
+
+    if looks_like_path {
+        resolve_path(base, value).display().to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn resolve_fabric_binary_override(
+    env_binary: Option<String>,
+    config_binary: Option<String>,
+    config_base_dir: Option<&Path>,
+) -> Option<FabricBinaryOverride> {
+    if let Some(value) = env_binary.filter(|value| !value.trim().is_empty()) {
+        return Some(FabricBinaryOverride {
+            value,
+            source: FabricBinaryOverrideSource::Env,
+        });
+    }
+
+    config_binary
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| FabricBinaryOverride {
+            value: config_base_dir
+                .map(|base| resolve_command_value(base, &value))
+                .unwrap_or(value),
+            source: FabricBinaryOverrideSource::Config,
+        })
+}
+
 /// Load configuration from all sources
 fn load_config() -> Result<ResolvedConfig> {
     // Default home directory
@@ -164,76 +222,97 @@ fn load_config() -> Result<ResolvedConfig> {
     // Check for config file
     let config_file = find_config_file();
 
-    let (home, library, content_types, safety) = if let Some(ref config_path) = config_file {
-        // Config file found - use it as base
-        let config = load_config_file(config_path)?;
+    let env_fabric_binary = std::env::var("ARKAI_FABRIC_BIN").ok();
 
-        // Base directory is the parent of .arkai/ (i.e., grandparent of config.yaml)
-        let base_dir = config_path
-            .parent() // .arkai/
-            .and_then(|p| p.parent()) // project root
-            .unwrap_or(Path::new("."));
+    let (home, library, content_types, safety, fabric_binary) =
+        if let Some(ref config_path) = config_file {
+            // Config file found - use it as base
+            let config = load_config_file(config_path)?;
 
-        // Resolve home path
-        let home = if let Ok(env_home) = std::env::var("ARKAI_HOME") {
-            PathBuf::from(env_home)
-        } else if let Some(ref home_path) = config.paths.home {
-            // home is relative to .arkai/ directory
-            let arkai_dir = config_path.parent().unwrap_or(Path::new("."));
-            resolve_path(arkai_dir, home_path)
+            // Base directory is the parent of .arkai/ (i.e., grandparent of config.yaml)
+            let base_dir = config_path
+                .parent() // .arkai/
+                .and_then(|p| p.parent()) // project root
+                .unwrap_or(Path::new("."));
+
+            // Resolve home path
+            let home = if let Ok(env_home) = std::env::var("ARKAI_HOME") {
+                PathBuf::from(env_home)
+            } else if let Some(ref home_path) = config.paths.home {
+                // home is relative to .arkai/ directory
+                let arkai_dir = config_path.parent().unwrap_or(Path::new("."));
+                resolve_path(arkai_dir, home_path)
+            } else {
+                default_home.clone()
+            };
+
+            // Resolve library path
+            let library = if let Ok(env_lib) = std::env::var("ARKAI_LIBRARY") {
+                PathBuf::from(env_lib)
+            } else if let Some(ref lib_path) = config.paths.library {
+                resolve_path(base_dir, lib_path)
+            } else {
+                home.join("library")
+            };
+
+            // Content type mappings
+            let content_types = config.paths.content_types;
+
+            let fabric_binary = resolve_fabric_binary_override(
+                env_fabric_binary.clone(),
+                config
+                    .fabric
+                    .as_ref()
+                    .and_then(|fabric| fabric.binary.clone()),
+                Some(base_dir),
+            );
+
+            // Safety settings
+            let safety = SafetySettings {
+                max_steps: config
+                    .safety
+                    .as_ref()
+                    .and_then(|s| s.max_steps)
+                    .unwrap_or(50),
+                timeout_seconds: config
+                    .safety
+                    .as_ref()
+                    .and_then(|s| s.timeout_seconds)
+                    .unwrap_or(600),
+                max_input_size_bytes: config
+                    .safety
+                    .as_ref()
+                    .and_then(|s| s.max_input_size_bytes)
+                    .unwrap_or(1_048_576),
+            };
+
+            (home, library, content_types, safety, fabric_binary)
         } else {
-            default_home.clone()
+            // No config file - use env vars or defaults
+            let home = std::env::var("ARKAI_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| default_home.clone());
+
+            let library = std::env::var("ARKAI_LIBRARY")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| home.join("library"));
+
+            let fabric_binary = resolve_fabric_binary_override(env_fabric_binary, None, None);
+
+            (
+                home,
+                library,
+                HashMap::new(),
+                SafetySettings::default(),
+                fabric_binary,
+            )
         };
-
-        // Resolve library path
-        let library = if let Ok(env_lib) = std::env::var("ARKAI_LIBRARY") {
-            PathBuf::from(env_lib)
-        } else if let Some(ref lib_path) = config.paths.library {
-            resolve_path(base_dir, lib_path)
-        } else {
-            home.join("library")
-        };
-
-        // Content type mappings
-        let content_types = config.paths.content_types;
-
-        // Safety settings
-        let safety = SafetySettings {
-            max_steps: config
-                .safety
-                .as_ref()
-                .and_then(|s| s.max_steps)
-                .unwrap_or(50),
-            timeout_seconds: config
-                .safety
-                .as_ref()
-                .and_then(|s| s.timeout_seconds)
-                .unwrap_or(600),
-            max_input_size_bytes: config
-                .safety
-                .as_ref()
-                .and_then(|s| s.max_input_size_bytes)
-                .unwrap_or(1_048_576),
-        };
-
-        (home, library, content_types, safety)
-    } else {
-        // No config file - use env vars or defaults
-        let home = std::env::var("ARKAI_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| default_home.clone());
-
-        let library = std::env::var("ARKAI_LIBRARY")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| home.join("library"));
-
-        (home, library, HashMap::new(), SafetySettings::default())
-    };
 
     Ok(ResolvedConfig {
         home,
         library,
         content_types,
+        fabric_binary,
         config_file,
         safety,
     })
@@ -271,6 +350,11 @@ pub fn runs_dir() -> Result<PathBuf> {
 /// Get the library directory.
 pub fn library_dir() -> Result<PathBuf> {
     Ok(config()?.library.clone())
+}
+
+/// Get the explicit Fabric binary override, if configured.
+pub fn fabric_binary_override() -> Result<Option<FabricBinaryOverride>> {
+    Ok(config()?.fabric_binary.clone())
 }
 
 /// Get the catalog path ($ARKAI_HOME/catalog.json)
@@ -350,6 +434,8 @@ paths:
   content_types:
     youtube: youtube
     articles: articles
+fabric:
+  binary: /opt/homebrew/bin/fabric-ai
 safety:
   max_steps: 100
 "#
@@ -360,6 +446,10 @@ safety:
         assert_eq!(config.version, Some("1.0".to_string()));
         assert_eq!(config.paths.home, Some("./".to_string()));
         assert_eq!(config.paths.library, Some("../library".to_string()));
+        assert_eq!(
+            config.fabric.and_then(|fabric| fabric.binary),
+            Some("/opt/homebrew/bin/fabric-ai".to_string())
+        );
         assert_eq!(
             config.paths.content_types.get("youtube"),
             Some(&"youtube".to_string())
@@ -378,6 +468,7 @@ safety:
             ]
             .into_iter()
             .collect(),
+            fabric_binary: None,
             config_file: None,
             safety: SafetySettings::default(),
         };
@@ -413,5 +504,42 @@ safety:
             resolve_path(&base, "/absolute/path"),
             PathBuf::from("/absolute/path")
         );
+    }
+
+    #[test]
+    fn test_resolve_command_value_leaves_plain_binary_name() {
+        let base = PathBuf::from("/home/user/project");
+
+        assert_eq!(resolve_command_value(&base, "fabric-ai"), "fabric-ai");
+        assert_eq!(
+            resolve_command_value(&base, "./bin/fabric-ai"),
+            "/home/user/project/./bin/fabric-ai"
+        );
+    }
+
+    #[test]
+    fn test_resolve_fabric_binary_override_prefers_env() {
+        let fabric_binary = resolve_fabric_binary_override(
+            Some("/env/fabric-ai".to_string()),
+            Some("/config/fabric-ai".to_string()),
+            Some(Path::new("/repo")),
+        )
+        .unwrap();
+
+        assert_eq!(fabric_binary.value, "/env/fabric-ai");
+        assert_eq!(fabric_binary.source, FabricBinaryOverrideSource::Env);
+    }
+
+    #[test]
+    fn test_resolve_fabric_binary_override_uses_config() {
+        let fabric_binary = resolve_fabric_binary_override(
+            None,
+            Some("./bin/fabric-ai".to_string()),
+            Some(Path::new("/repo")),
+        )
+        .unwrap();
+
+        assert_eq!(fabric_binary.value, "/repo/./bin/fabric-ai");
+        assert_eq!(fabric_binary.source, FabricBinaryOverrideSource::Config);
     }
 }
