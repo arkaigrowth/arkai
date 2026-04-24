@@ -351,6 +351,11 @@ impl Orchestrator {
 
                     // Persist artifact to disk
                     store.store_artifact(&step.name, &output.content).await?;
+                    for artifact in &output.artifacts {
+                        store
+                            .store_named_artifact(&step.name, &artifact.name, &artifact.content)
+                            .await?;
+                    }
 
                     // Log success
                     let complete_event = Event::new(

@@ -15,7 +15,7 @@ steps:
     adapter: fabric
     action: __youtube__
     input_from: pipeline_input
-    timeout_seconds: 120
+    timeout_seconds: 600
     retry_policy:
       max_attempts: 2
       initial_delay_ms: 3000
