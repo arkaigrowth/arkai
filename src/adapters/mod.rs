@@ -28,6 +28,9 @@ pub struct AdapterOutput {
     /// The content returned by the adapter
     pub content: String,
 
+    /// Additional named artifacts to persist for the step.
+    pub artifacts: Vec<NamedArtifact>,
+
     /// Tokens used (if available)
     pub tokens_used: Option<u64>,
 
@@ -40,10 +43,27 @@ impl AdapterOutput {
     pub fn new(content: String) -> Self {
         Self {
             content,
+            artifacts: Vec::new(),
             tokens_used: None,
             cost_usd: None,
         }
     }
+
+    /// Attach an additional named artifact to the adapter output.
+    pub fn with_artifact(mut self, name: impl Into<String>, content: impl Into<String>) -> Self {
+        self.artifacts.push(NamedArtifact {
+            name: name.into(),
+            content: content.into(),
+        });
+        self
+    }
+}
+
+/// Extra file artifact emitted by an adapter.
+#[derive(Debug, Clone)]
+pub struct NamedArtifact {
+    pub name: String,
+    pub content: String,
 }
 
 /// Trait for external adapters

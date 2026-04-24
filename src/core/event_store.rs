@@ -80,6 +80,38 @@ impl EventStore {
         Ok(artifact_path)
     }
 
+    /// Store a named artifact under a step-specific subdirectory.
+    pub async fn store_named_artifact(
+        &self,
+        step_name: &str,
+        name: &str,
+        content: &str,
+    ) -> Result<PathBuf> {
+        anyhow::ensure!(
+            Path::new(name)
+                .file_name()
+                .and_then(|file_name| file_name.to_str())
+                == Some(name),
+            "Artifact name must be a single filename: {}",
+            name
+        );
+
+        let step_dir = self.artifacts_dir.join(step_name);
+        fs::create_dir_all(&step_dir).await.with_context(|| {
+            format!(
+                "Failed to create artifact directory: {}",
+                step_dir.display()
+            )
+        })?;
+
+        let artifact_path = step_dir.join(name);
+        fs::write(&artifact_path, content)
+            .await
+            .with_context(|| format!("Failed to write artifact: {}", artifact_path.display()))?;
+
+        Ok(artifact_path)
+    }
+
     /// Load an artifact from disk
     pub async fn load_artifact(&self, step_name: &str) -> Result<Option<String>> {
         let artifact_path = self.artifacts_dir.join(format!("{}.md", step_name));
@@ -354,6 +386,23 @@ mod tests {
             events[0].domain_event.as_deref(),
             Some("pipeline.step.started")
         );
+    }
+
+    #[tokio::test]
+    async fn test_store_named_artifact_under_step_directory() {
+        let (store, _temp) = create_test_store().await;
+
+        let written = store
+            .store_named_artifact("fetch", "transcript.txt", "hello world")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            written,
+            store.artifacts_dir().join("fetch").join("transcript.txt")
+        );
+        let loaded = tokio::fs::read_to_string(&written).await.unwrap();
+        assert_eq!(loaded, "hello world");
     }
 
     #[tokio::test]

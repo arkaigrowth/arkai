@@ -19,8 +19,10 @@
 pub mod queue;
 pub mod transcriber;
 pub mod watcher;
+pub mod youtube;
 
 // Re-export key types
 pub use queue::{QueueItem, VoiceQueue, VoiceQueueError};
 pub use transcriber::{transcribe, TranscriptResult};
 pub use watcher::{AudioFileEvent, VoiceMemoWatcher, WatcherConfig};
+pub use youtube::{fetch_youtube_transcript, YouTubeTranscript};
