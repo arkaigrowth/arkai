@@ -5,12 +5,15 @@
 //! - `arkai voice scan` - Scan and queue files once
 //! - `arkai voice watch` - Watch for new files continuously
 
+use std::io::IsTerminal;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use chrono::Utc;
 use clap::Subcommand;
 
 use crate::adapters::{ClawdbotClient, TelegramClient};
+use crate::ingest::queue::ApprovalDecision;
 use crate::ingest::{transcribe, VoiceMemoWatcher, VoiceQueue, WatcherConfig};
 
 /// Voice capture subcommands
@@ -24,6 +27,51 @@ pub enum VoiceCommands {
         /// Path to watch (defaults to Voice Memos directory)
         #[arg(short, long)]
         path: Option<String>,
+    },
+
+    /// Approve a queued voice memo for processing
+    Approve {
+        /// Queue item ID or unique prefix
+        id: String,
+
+        /// Processing engine override
+        #[arg(long)]
+        engine: Option<String>,
+
+        /// Speaker count override
+        #[arg(long)]
+        speakers: Option<u32>,
+
+        /// Speaker names override
+        #[arg(long)]
+        names: Option<String>,
+
+        /// Category override
+        #[arg(long)]
+        category: Option<String>,
+
+        /// Allow large-file processing
+        #[arg(long)]
+        allow_large: bool,
+
+        /// Free-text processing hint
+        hint: Option<String>,
+    },
+
+    /// Skip a queued voice memo
+    Skip {
+        /// Queue item ID or unique prefix
+        id: String,
+
+        /// Human-readable skip reason
+        #[arg(long)]
+        reason: Option<String>,
+    },
+
+    /// Retry a failed or skipped voice memo
+    Retry {
+        /// Queue item ID or unique prefix
+        id: String,
     },
 
     /// Watch for new voice memos (continuous mode)
@@ -74,7 +122,7 @@ pub enum VoiceCommands {
 
     /// List all items in the queue
     List {
-        /// Filter by status (pending, processing, done, failed)
+        /// Filter by status (awaiting_approval, pending, processing, done, failed, skipped)
         #[arg(short, long)]
         status: Option<String>,
 
@@ -92,6 +140,17 @@ pub async fn execute(command: VoiceCommands) -> Result<()> {
     match command {
         VoiceCommands::Status => execute_status().await,
         VoiceCommands::Scan { path } => execute_scan(path).await,
+        VoiceCommands::Approve {
+            id,
+            engine,
+            speakers,
+            names,
+            category,
+            allow_large,
+            hint,
+        } => execute_approve(id, engine, speakers, names, category, allow_large, hint).await,
+        VoiceCommands::Skip { id, reason } => execute_skip(id, reason).await,
+        VoiceCommands::Retry { id } => execute_retry(id).await,
         VoiceCommands::Watch { once, path } => execute_watch(once, path).await,
         VoiceCommands::Process {
             once,
@@ -113,6 +172,70 @@ pub async fn execute(command: VoiceCommands) -> Result<()> {
     }
 }
 
+fn require_human_terminal() -> Result<()> {
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        anyhow::bail!("approve/skip/retry are human-only and require an interactive terminal");
+    }
+
+    Ok(())
+}
+
+async fn execute_approve(
+    id: String,
+    engine: Option<String>,
+    speakers: Option<u32>,
+    names: Option<String>,
+    category: Option<String>,
+    allow_large: bool,
+    hint: Option<String>,
+) -> Result<()> {
+    require_human_terminal()?;
+    let queue = VoiceQueue::open_default().await?;
+    let decision = ApprovalDecision {
+        engine,
+        speakers,
+        names,
+        category,
+        allow_large,
+        hint,
+        decided_at: Utc::now(),
+    };
+
+    queue
+        .approve(&id, decision)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    println!("Approved {}", id);
+
+    Ok(())
+}
+
+async fn execute_skip(id: String, reason: Option<String>) -> Result<()> {
+    require_human_terminal()?;
+    let queue = VoiceQueue::open_default().await?;
+
+    queue
+        .skip(&id, reason)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    println!("Skipped {}", id);
+
+    Ok(())
+}
+
+async fn execute_retry(id: String) -> Result<()> {
+    require_human_terminal()?;
+    let queue = VoiceQueue::open_default().await?;
+
+    queue
+        .retry(&id)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    println!("Retried {}", id);
+
+    Ok(())
+}
+
 /// Show queue status
 async fn execute_status() -> Result<()> {
     let queue = VoiceQueue::open_default().await?;
@@ -128,10 +251,12 @@ async fn execute_status() -> Result<()> {
     println!("Queue file:  {}", VoiceQueue::default_path()?.display());
     println!();
     println!("Queue:");
+    println!("  Awaiting:   {}", status.awaiting);
     println!("  Pending:    {}", status.pending);
     println!("  Processing: {}", status.processing);
     println!("  Done:       {}", status.done);
     println!("  Failed:     {}", status.failed);
+    println!("  Skipped:    {}", status.skipped);
     println!("  Total:      {}", status.total());
     println!();
 
@@ -140,9 +265,11 @@ async fn execute_status() -> Result<()> {
         for item in &status.recent {
             let status_str = match item.status {
                 crate::domain::VoiceQueueStatus::Pending => "PEND",
+                crate::domain::VoiceQueueStatus::AwaitingApproval => "WAIT",
                 crate::domain::VoiceQueueStatus::Processing => "PROC",
                 crate::domain::VoiceQueueStatus::Done => "DONE",
                 crate::domain::VoiceQueueStatus::Failed => "FAIL",
+                crate::domain::VoiceQueueStatus::Skipped => "SKIP",
             };
             println!(
                 "  [{}] {} ({})",
@@ -185,6 +312,7 @@ async fn execute_scan(path: Option<String>) -> Result<()> {
     println!("  New files queued:    {}", result.new_files);
     println!("  Already queued:      {}", result.already_queued);
     println!("  Already processed:   {}", result.already_processed);
+    println!("  Already skipped:     {}", result.already_skipped);
     println!("  Reset for retry:     {}", result.reset_for_retry);
     if result.deferred > 0 {
         println!("  Deferred (syncing):  {}", result.deferred);

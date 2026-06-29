@@ -221,6 +221,7 @@ impl VoiceMemoWatcher {
                     EnqueueResult::AlreadyQueued(_) => result.already_queued += 1,
                     EnqueueResult::AlreadyProcessed(_) => result.already_processed += 1,
                     EnqueueResult::ResetForRetry(_) => result.reset_for_retry += 1,
+                    EnqueueResult::AlreadySkipped(_) => result.already_skipped += 1,
                 },
                 Err(e) => {
                     tracing::warn!("Failed to enqueue {}: {}", path.display(), e);
@@ -304,6 +305,7 @@ pub struct ScanResult {
     pub new_files: usize,
     pub already_queued: usize,
     pub already_processed: usize,
+    pub already_skipped: usize,
     pub reset_for_retry: usize,
     pub deferred: usize,
     pub errors: usize,
@@ -311,7 +313,11 @@ pub struct ScanResult {
 
 impl ScanResult {
     pub fn total_scanned(&self) -> usize {
-        self.new_files + self.already_queued + self.already_processed + self.reset_for_retry
+        self.new_files
+            + self.already_queued
+            + self.already_processed
+            + self.already_skipped
+            + self.reset_for_retry
     }
 }
 
