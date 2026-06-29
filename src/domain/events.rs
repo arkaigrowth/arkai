@@ -187,6 +187,9 @@ pub enum VoiceQueueStatus {
     /// Waiting to be processed
     Pending,
 
+    /// Waiting for human approval before processing
+    AwaitingApproval,
+
     /// Currently being processed
     Processing,
 
@@ -195,11 +198,14 @@ pub enum VoiceQueueStatus {
 
     /// Processing failed
     Failed,
+
+    /// Human skipped this item
+    Skipped,
 }
 
 impl Default for VoiceQueueStatus {
     fn default() -> Self {
-        Self::Pending
+        Self::AwaitingApproval
     }
 }
 
@@ -207,9 +213,11 @@ impl std::fmt::Display for VoiceQueueStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Pending => write!(f, "pending"),
+            Self::AwaitingApproval => write!(f, "awaiting_approval"),
             Self::Processing => write!(f, "processing"),
             Self::Done => write!(f, "done"),
             Self::Failed => write!(f, "failed"),
+            Self::Skipped => write!(f, "skipped"),
         }
     }
 }
