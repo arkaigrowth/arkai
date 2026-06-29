@@ -217,7 +217,10 @@ impl VoiceMemoWatcher {
                 .await
             {
                 Ok(enqueue_result) => match enqueue_result {
-                    EnqueueResult::Queued(_) => result.new_files += 1,
+                    EnqueueResult::Queued(id) => {
+                        result.new_files += 1;
+                        result.new_ids.push(id);
+                    }
                     EnqueueResult::AlreadyQueued(_) => result.already_queued += 1,
                     EnqueueResult::AlreadyProcessed(_) => result.already_processed += 1,
                     EnqueueResult::ResetForRetry(_) => result.reset_for_retry += 1,
@@ -309,6 +312,7 @@ pub struct ScanResult {
     pub reset_for_retry: usize,
     pub deferred: usize,
     pub errors: usize,
+    pub new_ids: Vec<String>,
 }
 
 impl ScanResult {
