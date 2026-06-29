@@ -12,7 +12,9 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use clap::Subcommand;
 
-use crate::adapters::{ClawdbotClient, TelegramClient};
+use crate::adapters::{
+    build_default_notifier, notify_best_effort, ClawdbotClient, NotifyKind, TelegramClient,
+};
 use crate::ingest::queue::ApprovalDecision;
 use crate::ingest::{transcribe, VoiceMemoWatcher, VoiceQueue, WatcherConfig};
 
@@ -305,6 +307,7 @@ async fn execute_scan(path: Option<String>) -> Result<()> {
     let watcher = VoiceMemoWatcher::with_config(config);
     let queue = VoiceQueue::open_default().await?;
 
+    let notifier = build_default_notifier();
     let result = watcher.scan_once(&queue).await?;
 
     println!();
@@ -327,6 +330,12 @@ async fn execute_scan(path: Option<String>) -> Result<()> {
         println!("✅ {} new file(s) added to queue", result.new_files);
     }
 
+    for id in &result.new_ids {
+        if let Ok(Some(item)) = queue.get(id).await {
+            notify_best_effort(notifier.as_deref(), &item, NotifyKind::NewAwaiting).await;
+        }
+    }
+
     Ok(())
 }
 
@@ -339,6 +348,7 @@ async fn execute_watch(once: bool, path: Option<String>) -> Result<()> {
 
     let watcher = VoiceMemoWatcher::with_config(config.clone());
     let queue = Arc::new(VoiceQueue::open_default().await?);
+    let notifier = build_default_notifier();
 
     if once {
         // Just scan once and exit
@@ -350,6 +360,12 @@ async fn execute_watch(once: bool, path: Option<String>) -> Result<()> {
             println!("✅ Queued {} new file(s)", result.new_files);
         } else {
             println!("ℹ️  No new files to queue");
+        }
+
+        for id in &result.new_ids {
+            if let Ok(Some(item)) = queue.get(id).await {
+                notify_best_effort(notifier.as_deref(), &item, NotifyKind::NewAwaiting).await;
+            }
         }
 
         return Ok(());
@@ -366,8 +382,15 @@ async fn execute_watch(once: bool, path: Option<String>) -> Result<()> {
         println!("📥 Initial scan: {} new file(s) queued", initial.new_files);
     }
 
+    for id in &initial.new_ids {
+        if let Ok(Some(item)) = queue.get(id).await {
+            notify_best_effort(notifier.as_deref(), &item, NotifyKind::NewAwaiting).await;
+        }
+    }
+
     // Start watching
-    let (mut event_rx, handle) = watcher.watch(queue).await?;
+    let watch_queue = Arc::clone(&queue);
+    let (mut event_rx, handle) = watcher.watch(watch_queue).await?;
 
     // Set up Ctrl+C handler
     let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -385,6 +408,9 @@ async fn execute_watch(once: bool, path: Option<String>) -> Result<()> {
                     event.path.file_name().unwrap_or_default().to_string_lossy(),
                     &event.hash[..8]
                 );
+                if let Ok(Some(item)) = queue.get(&event.hash).await {
+                    notify_best_effort(notifier.as_deref(), &item, NotifyKind::NewAwaiting).await;
+                }
             }
             _ = &mut stop_rx => {
                 println!();

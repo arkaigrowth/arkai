@@ -5,6 +5,7 @@
 
 pub mod clawdbot;
 pub mod fabric;
+pub mod notify;
 pub mod telegram;
 
 use std::time::Duration;
@@ -18,6 +19,11 @@ pub use fabric::{ACTION_WEB, ACTION_YOUTUBE};
 
 // Re-export Telegram adapter
 pub use telegram::{TelegramClient, TelegramConfig};
+
+// Re-export notification adapter
+pub use notify::{
+    build_default_notifier, notify_best_effort, Notifier, NotifyKind, TelegramNotifier,
+};
 
 // Re-export Clawdbot adapter
 pub use clawdbot::ClawdbotClient;
