@@ -1,0 +1,10 @@
+#!/bin/sh
+# arkai local CI gate — runs the invariant suite before every commit.
+# Installed by: ops/ci/install-hooks.sh (copies into .git/hooks/pre-commit).
+# This is the interim gate while origin/main is unreconciled (GH Actions inert);
+# see docs (voice-memo-pipeline) SPINE-STEELMAN-M3M4.md finding I9.
+set -e
+cd "$(git rev-parse --show-toplevel)"
+echo "[pre-commit] cargo test (voice-spine invariants)..."
+cargo test --quiet
+echo "[pre-commit] OK"
