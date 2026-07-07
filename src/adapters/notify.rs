@@ -219,6 +219,70 @@ pub async fn notify_best_effort(
     notify_best_effort_inner(notifier, item, kind, NOTIFY_TIMEOUT).await;
 }
 
+/// Max individual `NewAwaiting` cards per scan; the rest collapse into one
+/// summary card. A bulk backlog (first multi-source scan sent 111 cards on
+/// 2026-07-07) or a newly added source must not storm the chat, and Telegram
+/// 429s past ~1 msg/s anyway.
+pub(crate) const MAX_NEW_AWAITING_PINGS_PER_SCAN: usize = 5;
+
+/// Ping the first few genuinely-new awaiting items individually, then send a
+/// single "+K more" summary card for the remainder.
+pub async fn notify_new_awaiting_capped(notifier: Option<&dyn Notifier>, items: &[QueueItem]) {
+    for item in items.iter().take(MAX_NEW_AWAITING_PINGS_PER_SCAN) {
+        notify_best_effort(notifier, item, NotifyKind::NewAwaiting).await;
+    }
+
+    let overflow = items.len().saturating_sub(MAX_NEW_AWAITING_PINGS_PER_SCAN);
+    if overflow > 0 {
+        // The trait signature is frozen at (item, kind), so the summary rides a
+        // synthetic item; the card renders the detail text and the item name.
+        let summary_item = summary_queue_item(items.len());
+        notify_best_effort(
+            notifier,
+            &summary_item,
+            NotifyKind::NeedsHuman {
+                detail: format!(
+                    "+{overflow} more new recording(s) enqueued this scan \
+                     (of {total} total) — review with: arkai voice list --status awaiting_approval",
+                    total = items.len()
+                ),
+            },
+        )
+        .await;
+    }
+}
+
+fn summary_queue_item(total: usize) -> QueueItem {
+    QueueItem {
+        id: "scan-summary".to_string(),
+        status: crate::domain::VoiceQueueStatus::AwaitingApproval,
+        data: crate::ingest::queue::QueueItemData {
+            file_path: std::path::PathBuf::new(),
+            file_name: format!("{total} new recordings awaiting approval"),
+            file_size: 0,
+            detected_at: chrono::Utc::now(),
+            duration_seconds: None,
+            recorded_at: None,
+            source: None,
+            kind: None,
+            private: false,
+        },
+        started_at: None,
+        completed_at: None,
+        error: None,
+        retry_count: 0,
+        approved_once: false,
+        chosen_engine: None,
+        overrides: None,
+        allow_large: false,
+        decided_at: None,
+        pid: None,
+        proc_start_epoch: None,
+        attempt_count: 0,
+        auto_reset_count: 0,
+    }
+}
+
 async fn notify_best_effort_inner(
     notifier: Option<&dyn Notifier>,
     item: &QueueItem,
@@ -385,6 +449,54 @@ mod tests {
         let calls = stub.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0], (item.id, NotifyKind::NewAwaiting));
+    }
+
+    #[tokio::test]
+    async fn test_new_awaiting_pings_capped_with_summary() {
+        let items: Vec<QueueItem> = (0..8)
+            .map(|i| {
+                let mut item = sample_item();
+                item.id = format!("item{i:08}0000");
+                item
+            })
+            .collect();
+        let stub = RecordingNotifier {
+            calls: Mutex::new(Vec::new()),
+        };
+
+        notify_new_awaiting_capped(Some(&stub), &items).await;
+
+        let calls = stub.calls.lock().unwrap();
+        assert_eq!(calls.len(), MAX_NEW_AWAITING_PINGS_PER_SCAN + 1);
+        assert!(calls[..MAX_NEW_AWAITING_PINGS_PER_SCAN]
+            .iter()
+            .all(|(_, kind)| *kind == NotifyKind::NewAwaiting));
+        let (summary_id, summary_kind) = &calls[MAX_NEW_AWAITING_PINGS_PER_SCAN];
+        assert_eq!(summary_id, "scan-summary");
+        assert!(matches!(
+            summary_kind,
+            NotifyKind::NeedsHuman { detail } if detail.contains("+3 more")
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_new_awaiting_under_cap_sends_no_summary() {
+        let items: Vec<QueueItem> = (0..3)
+            .map(|i| {
+                let mut item = sample_item();
+                item.id = format!("item{i:08}0000");
+                item
+            })
+            .collect();
+        let stub = RecordingNotifier {
+            calls: Mutex::new(Vec::new()),
+        };
+
+        notify_new_awaiting_capped(Some(&stub), &items).await;
+
+        let calls = stub.calls.lock().unwrap();
+        assert_eq!(calls.len(), 3);
+        assert!(calls.iter().all(|(_, kind)| *kind == NotifyKind::NewAwaiting));
     }
 
     #[test]

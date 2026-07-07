@@ -22,7 +22,8 @@ pub use telegram::{TelegramClient, TelegramConfig};
 
 // Re-export notification adapter
 pub use notify::{
-    build_default_notifier, notify_best_effort, Notifier, NotifyKind, TelegramNotifier,
+    build_default_notifier, notify_best_effort, notify_new_awaiting_capped, Notifier, NotifyKind,
+    TelegramNotifier,
 };
 
 // Re-export Clawdbot adapter
