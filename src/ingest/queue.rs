@@ -24,6 +24,7 @@ use crate::domain::VoiceQueueStatus;
 const AUTO_RETRY_CAP: u32 = 1;
 const STALE_PROCESSING_BACKSTOP_SECS: i64 = 24 * 60 * 60;
 const PID_REUSE_GRACE_SECS: i64 = 5;
+const CACHE_RETENTION_SECS: u64 = 30 * 24 * 60 * 60;
 
 /// Errors that can occur with the voice queue
 #[derive(Debug, Error)]
@@ -39,6 +40,13 @@ pub enum VoiceQueueError {
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("Cache copy failed from {from} to {to}: {source}")]
+    CacheCopy {
+        from: PathBuf,
+        to: PathBuf,
+        source: std::io::Error,
+    },
 
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
@@ -154,6 +162,18 @@ pub struct QueueItemData {
     /// Original recording timestamp, populated by later source scanners.
     #[serde(default)]
     pub recorded_at: Option<DateTime<Utc>>,
+
+    /// Source config name that discovered this item.
+    #[serde(default)]
+    pub source: Option<String>,
+
+    /// Processing kind: "audio" or "prediarized".
+    #[serde(default)]
+    pub kind: Option<String>,
+
+    /// Whether remote notifications must redact human-readable details.
+    #[serde(default)]
+    pub private: bool,
 }
 
 /// A queue item with current state (derived from replaying events)
@@ -221,6 +241,32 @@ pub struct ReapReport {
     pub quarantined: Vec<QueueItem>,
 }
 
+#[derive(Debug, Clone)]
+pub struct EnqueueMetadata {
+    pub source: Option<String>,
+    pub kind: Option<String>,
+    pub private: bool,
+    pub recorded_at: Option<DateTime<Utc>>,
+}
+
+impl Default for EnqueueMetadata {
+    fn default() -> Self {
+        Self {
+            source: None,
+            kind: Some("audio".to_string()),
+            private: false,
+            recorded_at: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CacheSweepReport {
+    pub backfilled: usize,
+    pub retained: usize,
+    pub errors: usize,
+}
+
 /// JSONL-based voice queue
 pub struct VoiceQueue {
     /// Path to the queue JSONL file
@@ -228,6 +274,9 @@ pub struct VoiceQueue {
 
     /// Sibling advisory lock file path
     lock_path: PathBuf,
+
+    /// Cache directory paired with this queue.
+    cache_dir: PathBuf,
 
     /// Process-local mutex shared by handles for the same lock path
     process_lock: Arc<AsyncMutex<()>>,
@@ -286,12 +335,21 @@ impl VoiceQueue {
     /// Create a new voice queue
     pub fn new(queue_path: PathBuf) -> Self {
         let lock_path = queue_path.with_extension("lock");
+        let cache_dir = queue_path
+            .parent()
+            .map(|parent| parent.join("voice_cache"))
+            .unwrap_or_else(|| PathBuf::from("voice_cache"));
         let process_lock = process_lock_for(&lock_path);
         Self {
             queue_path,
             lock_path,
+            cache_dir,
             process_lock,
         }
+    }
+
+    pub fn cache_dir(&self) -> &Path {
+        &self.cache_dir
     }
 
     /// Create a queue in the default location (~/.arkai/voice_queue.jsonl)
@@ -548,11 +606,39 @@ impl VoiceQueue {
         file_size: u64,
         detected_at: DateTime<Utc>,
     ) -> Result<EnqueueResult, VoiceQueueError> {
+        self.enqueue_with_metadata(
+            file_path,
+            file_size,
+            detected_at,
+            EnqueueMetadata::default(),
+        )
+        .await
+    }
+
+    pub async fn enqueue_with_metadata(
+        &self,
+        file_path: &Path,
+        file_size: u64,
+        detected_at: DateTime<Utc>,
+        metadata: EnqueueMetadata,
+    ) -> Result<EnqueueResult, VoiceQueueError> {
         // Compute content hash
         let hash = compute_file_hash(file_path).await?;
 
-        // Probe audio duration
-        let duration_seconds = probe_duration(file_path).await;
+        let kind = metadata.kind.unwrap_or_else(|| "audio".to_string());
+        let duration_seconds = if kind == "prediarized" {
+            None
+        } else {
+            probe_duration(file_path).await
+        };
+
+        let cache_path = self.cache_path_for_id_and_source(&hash, file_path);
+        // Skip when the copy already exists: item_id is a content hash, so an
+        // existing cache file is byte-identical — without this check every scan
+        // tick would re-copy the entire awaiting backlog (~142 items today).
+        if !path_is_file(&cache_path).await && self.should_precopy_for_hash(&hash).await? {
+            copy_to_cache(file_path, &cache_path).await?;
+        }
 
         // Create queue item data
         let item_data = QueueItemData {
@@ -565,7 +651,10 @@ impl VoiceQueue {
             file_size,
             detected_at,
             duration_seconds,
-            recorded_at: None,
+            recorded_at: metadata.recorded_at,
+            source: metadata.source,
+            kind: Some(kind),
+            private: metadata.private,
         };
 
         self.with_queue_lock(|| async {
@@ -612,6 +701,118 @@ impl VoiceQueue {
             Ok(EnqueueResult::Queued(hash.clone()))
         })
         .await
+    }
+
+    pub fn cache_path_for_id_and_source(&self, item_id: &str, source_path: &Path) -> PathBuf {
+        let ext = source_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| format!(".{ext}"))
+            .unwrap_or_default();
+        self.cache_dir.join(format!("{item_id}{ext}"))
+    }
+
+    pub fn cache_path_for_item(&self, item: &QueueItem) -> PathBuf {
+        self.cache_path_for_id_and_source(&item.id, &item.data.file_path)
+    }
+
+    async fn should_precopy_for_hash(&self, hash: &str) -> Result<bool, VoiceQueueError> {
+        let items = self.replay().await?;
+        let Some(existing) = items.get(hash) else {
+            return Ok(true);
+        };
+
+        Ok(match existing.status {
+            VoiceQueueStatus::Done | VoiceQueueStatus::Skipped => false,
+            VoiceQueueStatus::Failed if existing.auto_reset_count >= AUTO_RETRY_CAP => false,
+            _ => true,
+        })
+    }
+
+    pub async fn cache_sweep(&self) -> Result<CacheSweepReport, VoiceQueueError> {
+        let items = self.replay().await?;
+        let mut report = CacheSweepReport::default();
+
+        for item in items.values() {
+            if item.status != VoiceQueueStatus::Pending {
+                continue;
+            }
+
+            let cache_path = self.cache_path_for_item(item);
+            if path_is_file(&cache_path).await {
+                continue;
+            }
+
+            if !path_is_file(&item.data.file_path).await {
+                continue;
+            }
+
+            match copy_to_cache(&item.data.file_path, &cache_path).await {
+                Ok(()) => report.backfilled += 1,
+                Err(error) => {
+                    report.errors += 1;
+                    tracing::warn!(
+                        item_id = %item.id,
+                        error = %error,
+                        "failed to backfill voice cache"
+                    );
+                }
+            }
+        }
+
+        if let Err(error) = fs::create_dir_all(&self.cache_dir).await {
+            report.errors += 1;
+            tracing::warn!(
+                path = %self.cache_dir.display(),
+                error = %error,
+                "failed to prepare voice cache for retention sweep"
+            );
+            return Ok(report);
+        }
+
+        let mut entries = match fs::read_dir(&self.cache_dir).await {
+            Ok(entries) => entries,
+            Err(error) => {
+                report.errors += 1;
+                tracing::warn!(
+                    path = %self.cache_dir.display(),
+                    error = %error,
+                    "failed to read voice cache for retention sweep"
+                );
+                return Ok(report);
+            }
+        };
+
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            let Some(item_id) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            let Some(item) = items.get(item_id) else {
+                continue;
+            };
+            if !is_terminal_status(item.status) {
+                continue;
+            }
+            if !cache_file_is_older_than(&path, CACHE_RETENTION_SECS).await {
+                continue;
+            }
+
+            match fs::remove_file(&path).await {
+                Ok(()) => report.retained += 1,
+                Err(error) => {
+                    report.errors += 1;
+                    tracing::warn!(
+                        path = %path.display(),
+                        item_id = %item.id,
+                        error = %error,
+                        "failed to delete expired voice cache file"
+                    );
+                }
+            }
+        }
+
+        Ok(report)
     }
 
     /// Get all pending items (ready for processing)
@@ -1076,6 +1277,48 @@ impl QueueStatus {
     }
 }
 
+async fn copy_to_cache(source: &Path, destination: &Path) -> Result<(), VoiceQueueError> {
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).await?;
+    }
+
+    fs::copy(source, destination)
+        .await
+        .map(|_| ())
+        .map_err(|source_error| VoiceQueueError::CacheCopy {
+            from: source.to_path_buf(),
+            to: destination.to_path_buf(),
+            source: source_error,
+        })
+}
+
+async fn path_is_file(path: &Path) -> bool {
+    fs::metadata(path)
+        .await
+        .map(|metadata| metadata.is_file())
+        .unwrap_or(false)
+}
+
+fn is_terminal_status(status: VoiceQueueStatus) -> bool {
+    matches!(
+        status,
+        VoiceQueueStatus::Done | VoiceQueueStatus::Skipped | VoiceQueueStatus::Failed
+    )
+}
+
+async fn cache_file_is_older_than(path: &Path, max_age_secs: u64) -> bool {
+    let Ok(metadata) = fs::metadata(path).await else {
+        return false;
+    };
+    let Ok(modified) = metadata.modified() else {
+        return false;
+    };
+    modified
+        .elapsed()
+        .map(|age| age > Duration::from_secs(max_age_secs))
+        .unwrap_or(false)
+}
+
 /// Compute SHA256 hash of file content using streaming (8KB chunks)
 /// Returns first 12 hex characters of the hash.
 /// Uses streaming to avoid loading entire file into memory.
@@ -1198,6 +1441,9 @@ mod tests {
             detected_at: Utc::now(),
             duration_seconds: None,
             recorded_at: None,
+            source: None,
+            kind: Some("audio".to_string()),
+            private: false,
         }
     }
 
@@ -1291,6 +1537,118 @@ mod tests {
         assert_eq!(status.awaiting, 1);
         assert_eq!(status.pending, 0);
         assert_eq!(status.done, 0);
+    }
+
+    #[tokio::test]
+    async fn test_precopy_exists_after_enqueue() {
+        let (queue, temp) = create_test_queue().await;
+        let audio_path = create_audio_file(&temp, "copy.m4a", b"copy me").await;
+
+        let result = queue.enqueue(&audio_path, 7, Utc::now()).await.unwrap();
+        let cache_path = queue.cache_path_for_id_and_source(result.id(), &audio_path);
+
+        assert_eq!(tokio::fs::read(&cache_path).await.unwrap(), b"copy me");
+    }
+
+    #[tokio::test]
+    async fn test_enqueue_metadata_replays_additive_fields() {
+        let (queue, temp) = create_test_queue().await;
+        let transcript = create_audio_file(&temp, "meeting.md", b"# Meeting").await;
+        let recorded_at = Utc::now();
+
+        let result = queue
+            .enqueue_with_metadata(
+                &transcript,
+                9,
+                Utc::now(),
+                EnqueueMetadata {
+                    source: Some("transcribex-exports".to_string()),
+                    kind: Some("prediarized".to_string()),
+                    private: true,
+                    recorded_at: Some(recorded_at),
+                },
+            )
+            .await
+            .unwrap();
+        let item = queue.get(result.id()).await.unwrap().unwrap();
+
+        assert_eq!(item.data.source.as_deref(), Some("transcribex-exports"));
+        assert_eq!(item.data.kind.as_deref(), Some("prediarized"));
+        assert!(item.data.private);
+        assert_eq!(item.data.recorded_at, Some(recorded_at));
+        assert!(item.data.duration_seconds.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_backfill_copies_pending_item_missing_cache() {
+        let (queue, temp) = create_test_queue().await;
+        let audio_path = create_audio_file(&temp, "backfill.m4a", b"backfill").await;
+        let result = queue.enqueue(&audio_path, 8, Utc::now()).await.unwrap();
+        let id = result.id().to_string();
+        queue
+            .approve(&id, ApprovalDecision::default())
+            .await
+            .unwrap();
+        let cache_path = queue.cache_path_for_id_and_source(&id, &audio_path);
+        tokio::fs::remove_file(&cache_path).await.unwrap();
+
+        let report = queue.cache_sweep().await.unwrap();
+
+        assert_eq!(report.backfilled, 1);
+        assert_eq!(tokio::fs::read(&cache_path).await.unwrap(), b"backfill");
+    }
+
+    #[tokio::test]
+    async fn test_retention_deletes_only_terminal_old_cache_files() {
+        use std::time::SystemTime;
+
+        use filetime::{set_file_mtime, FileTime};
+
+        let (queue, temp) = create_test_queue().await;
+        let terminal_path = create_audio_file(&temp, "terminal.m4a", b"terminal").await;
+        let pending_path = create_audio_file(&temp, "pending.m4a", b"pending").await;
+        let terminal_id = queue
+            .enqueue(&terminal_path, 8, Utc::now())
+            .await
+            .unwrap()
+            .id()
+            .to_string();
+        let pending_id = queue
+            .enqueue(&pending_path, 7, Utc::now())
+            .await
+            .unwrap()
+            .id()
+            .to_string();
+        queue.skip(&terminal_id, None).await.unwrap();
+        queue
+            .approve(&pending_id, ApprovalDecision::default())
+            .await
+            .unwrap();
+
+        let terminal_cache = queue.cache_path_for_id_and_source(&terminal_id, &terminal_path);
+        let pending_cache = queue.cache_path_for_id_and_source(&pending_id, &pending_path);
+        let orphan_cache = queue.cache_dir().join("orphan123456.m4a");
+        tokio::fs::write(&orphan_cache, b"orphan").await.unwrap();
+
+        let old_time = FileTime::from_unix_time(
+            SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64
+                - (CACHE_RETENTION_SECS as i64)
+                - 60,
+            0,
+        );
+        set_file_mtime(&terminal_cache, old_time).unwrap();
+        set_file_mtime(&pending_cache, old_time).unwrap();
+        set_file_mtime(&orphan_cache, old_time).unwrap();
+
+        let report = queue.cache_sweep().await.unwrap();
+
+        assert_eq!(report.retained, 1);
+        assert!(!terminal_cache.exists());
+        assert!(pending_cache.exists());
+        assert!(orphan_cache.exists());
     }
 
     #[tokio::test]

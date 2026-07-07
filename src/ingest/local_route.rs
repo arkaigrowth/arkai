@@ -1,5 +1,6 @@
 //! Local `transcribe-memo` processing route for approved voice queue items.
 
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -11,6 +12,7 @@ use tokio::io::AsyncReadExt;
 
 use crate::adapters::{notify_best_effort, Notifier, NotifyKind};
 use crate::domain::VoiceQueueStatus;
+use crate::ingest::sources::load_voice_sources;
 use crate::ingest::{QueueItem, VoiceQueue};
 
 const DEFAULT_TRANSCRIBE_MEMO_BIN: &str = "/Users/alexkamysz/bin/transcribe-memo";
@@ -104,6 +106,7 @@ async fn execute_process_local_with_bin(
 
     let mut attempted_count = 0u32;
     let mut total_duration = 0.0f32;
+    let source_categories = load_source_categories();
 
     loop {
         let pending = queue
@@ -147,7 +150,16 @@ async fn execute_process_local_with_bin(
                 &item.id[..8]
             );
 
-            if let Err(error) = process_one_item(queue, &item, notifier, bin_override, None).await {
+            if let Err(error) = process_one_item_with_source_categories(
+                queue,
+                &item,
+                notifier,
+                bin_override,
+                None,
+                &source_categories,
+            )
+            .await
+            {
                 let reason = error.to_string();
                 tracing::warn!(item_id = %item.id, error = %reason, "local route item failed");
                 mark_failed_and_notify(queue, &item, &reason, notifier).await;
@@ -179,6 +191,7 @@ async fn execute_process_local_with_bin(
     Ok(())
 }
 
+#[cfg(test)]
 async fn process_one_item(
     queue: &VoiceQueue,
     item: &QueueItem,
@@ -186,7 +199,26 @@ async fn process_one_item(
     bin_override: Option<&Path>,
     timeout_override: Option<Duration>,
 ) -> Result<()> {
-    let input = match resolve_input_path(item).await {
+    process_one_item_with_source_categories(
+        queue,
+        item,
+        notifier,
+        bin_override,
+        timeout_override,
+        &HashMap::new(),
+    )
+    .await
+}
+
+async fn process_one_item_with_source_categories(
+    queue: &VoiceQueue,
+    item: &QueueItem,
+    notifier: Option<&dyn Notifier>,
+    bin_override: Option<&Path>,
+    timeout_override: Option<Duration>,
+    source_categories: &HashMap<String, String>,
+) -> Result<()> {
+    let input = match resolve_input_path_for_queue(queue, item).await {
         Ok(Some(path)) => path,
         Ok(None) => {
             mark_failed_and_notify(queue, item, "source unreadable (moved? FDA?)", notifier).await;
@@ -215,7 +247,7 @@ async fn process_one_item(
     }
 
     let timeout = timeout_override.unwrap_or_else(|| hard_timeout(item.data.duration_seconds));
-    let args = transcribe_memo_args(item, &input);
+    let args = transcribe_memo_args_with_source_categories(item, &input, source_categories);
     let bin = bin_override
         .map(Path::to_path_buf)
         .unwrap_or_else(transcribe_memo_bin);
@@ -249,6 +281,19 @@ async fn process_one_item(
     Ok(())
 }
 
+fn load_source_categories() -> HashMap<String, String> {
+    match load_voice_sources() {
+        Ok(sources) => sources
+            .into_iter()
+            .filter_map(|source| source.category.map(|category| (source.name, category)))
+            .collect(),
+        Err(error) => {
+            tracing::warn!(error = %error, "failed to load voice source categories");
+            HashMap::new()
+        }
+    }
+}
+
 async fn mark_failed_and_notify(
     queue: &VoiceQueue,
     item: &QueueItem,
@@ -276,9 +321,11 @@ async fn mark_failed_and_notify(
     }
 }
 
-async fn resolve_input_path(item: &QueueItem) -> Result<Option<PathBuf>> {
-    let cache_dir = crate::config::voice_cache_dir()?;
-    resolve_input_path_in_cache(item, &cache_dir).await
+async fn resolve_input_path_for_queue(
+    queue: &VoiceQueue,
+    item: &QueueItem,
+) -> Result<Option<PathBuf>> {
+    resolve_input_path_in_cache(item, queue.cache_dir()).await
 }
 
 async fn resolve_input_path_in_cache(
@@ -318,23 +365,47 @@ fn transcribe_memo_bin() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(DEFAULT_TRANSCRIBE_MEMO_BIN))
 }
 
+#[cfg(test)]
 fn transcribe_memo_args(item: &QueueItem, input: &Path) -> Vec<OsString> {
-    let mut args = vec![
-        input.as_os_str().to_os_string(),
-        OsString::from("--stem"),
-        OsString::from(file_stem(&item.data.file_name)),
-    ];
+    transcribe_memo_args_with_source_categories(item, input, &HashMap::new())
+}
+
+fn transcribe_memo_args_with_source_categories(
+    item: &QueueItem,
+    input: &Path,
+    source_categories: &HashMap<String, String>,
+) -> Vec<OsString> {
+    let is_prediarized = item.data.kind.as_deref() == Some("prediarized");
+    let mut args = if is_prediarized {
+        vec![
+            OsString::from("--prediarized"),
+            input.as_os_str().to_os_string(),
+        ]
+    } else {
+        vec![input.as_os_str().to_os_string()]
+    };
+
+    args.push(OsString::from("--stem"));
+    args.push(OsString::from(file_stem(&item.data.file_name)));
 
     if let Some(recorded_at) = item.data.recorded_at {
         args.push(OsString::from("--when"));
-        args.push(OsString::from(recorded_at.to_rfc3339()));
+        // transcribe-memo parses --when with strptime("%Y-%m-%d %H:%M") —
+        // RFC3339 would crash it. recorded_at is wall-clock time stored under
+        // a UTC label (see recorded_at_for_path), so format it naively.
+        args.push(OsString::from(
+            recorded_at.format("%Y-%m-%d %H:%M").to_string(),
+        ));
     }
 
-    if let Some(engine) = &item.chosen_engine {
+    if !is_prediarized {
         args.push(OsString::from("--engine"));
-        args.push(OsString::from(engine));
+        args.push(OsString::from(
+            item.chosen_engine.as_deref().unwrap_or("auto"),
+        ));
     }
 
+    let mut has_category = false;
     if let Some(overrides) = item.overrides.as_ref().and_then(|value| value.as_object()) {
         if let Some(speakers) = overrides.get("speakers").and_then(|value| value.as_u64()) {
             args.push(OsString::from("--speakers"));
@@ -347,10 +418,23 @@ fn transcribe_memo_args(item: &QueueItem, input: &Path) -> Vec<OsString> {
         if let Some(category) = overrides.get("category").and_then(|value| value.as_str()) {
             args.push(OsString::from("--category"));
             args.push(OsString::from(category));
+            has_category = true;
         }
         if let Some(hint) = overrides.get("hint").and_then(|value| value.as_str()) {
             args.push(OsString::from("--context"));
             args.push(OsString::from(hint));
+        }
+    }
+
+    if !has_category {
+        if let Some(category) = item
+            .data
+            .source
+            .as_ref()
+            .and_then(|source| source_categories.get(source))
+        {
+            args.push(OsString::from("--category"));
+            args.push(OsString::from(category));
         }
     }
 
@@ -534,6 +618,9 @@ fn synthetic_alert_item(id: &str, file_name: &str) -> QueueItem {
             detected_at: chrono::Utc::now(),
             duration_seconds: None,
             recorded_at: None,
+            source: None,
+            kind: Some("audio".to_string()),
+            private: false,
         },
         started_at: None,
         completed_at: None,
@@ -575,6 +662,9 @@ mod tests {
                 detected_at: Utc::now(),
                 duration_seconds: Some(10.0),
                 recorded_at: None,
+                source: None,
+                kind: Some("audio".to_string()),
+                private: false,
             },
             started_at: None,
             completed_at: None,
@@ -697,6 +787,136 @@ mod tests {
         assert!(args.iter().any(|arg| arg == "--when"));
     }
 
+    #[test]
+    fn test_transcribe_memo_args_engine_auto_when_no_chosen_engine() {
+        let item = sample_item_with_path(PathBuf::from("/tmp/input.m4a"));
+
+        let args: Vec<String> = transcribe_memo_args(&item, Path::new("/tmp/input.m4a"))
+            .into_iter()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+
+        assert!(args.windows(2).any(|pair| pair == ["--engine", "auto"]));
+    }
+
+    #[test]
+    fn test_transcribe_memo_args_category_from_source_config_when_human_gave_none() {
+        let mut item = sample_item_with_path(PathBuf::from("/tmp/input.m4a"));
+        item.data.source = Some("private-source".to_string());
+        let source_categories =
+            HashMap::from([("private-source".to_string(), "private-vault".to_string())]);
+
+        let args: Vec<String> = transcribe_memo_args_with_source_categories(
+            &item,
+            Path::new("/tmp/input.m4a"),
+            &source_categories,
+        )
+        .into_iter()
+        .map(|arg| arg.to_string_lossy().to_string())
+        .collect();
+
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--category", "private-vault"]));
+    }
+
+    #[test]
+    fn test_transcribe_memo_args_human_category_wins_over_source_config() {
+        let mut item = sample_item_with_path(PathBuf::from("/tmp/input.m4a"));
+        item.data.source = Some("private-source".to_string());
+        item.overrides = Some(serde_json::json!({ "category": "human-choice" }));
+        let source_categories =
+            HashMap::from([("private-source".to_string(), "private-vault".to_string())]);
+
+        let args: Vec<String> = transcribe_memo_args_with_source_categories(
+            &item,
+            Path::new("/tmp/input.m4a"),
+            &source_categories,
+        )
+        .into_iter()
+        .map(|arg| arg.to_string_lossy().to_string())
+        .collect();
+
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--category", "human-choice"]));
+        assert!(!args
+            .windows(2)
+            .any(|pair| pair == ["--category", "private-vault"]));
+    }
+
+    #[test]
+    fn test_transcribe_memo_args_prediarized_uses_flag_and_no_engine() {
+        let mut item = sample_item_with_path(PathBuf::from("/tmp/call.md"));
+        item.data.kind = Some("prediarized".to_string());
+
+        let args: Vec<String> = transcribe_memo_args(&item, Path::new("/tmp/call.md"))
+            .into_iter()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+
+        assert_eq!(args[0], "--prediarized");
+        assert_eq!(args[1], "/tmp/call.md");
+        assert!(!args.iter().any(|arg| arg == "--engine"));
+    }
+
+    #[tokio::test]
+    async fn test_prediarized_item_execs_prediarized_flag() {
+        let temp = TempDir::new().unwrap();
+        let transcript = temp.path().join("call.md");
+        let args_file = temp.path().join("args.txt");
+        tokio::fs::write(&transcript, b"Speaker 1: hello")
+            .await
+            .unwrap();
+        let queue = VoiceQueue::new(temp.path().join("queue.jsonl"));
+        let id = queue
+            .enqueue_with_metadata(
+                &transcript,
+                16,
+                Utc::now(),
+                crate::ingest::queue::EnqueueMetadata {
+                    source: Some("exports".to_string()),
+                    kind: Some("prediarized".to_string()),
+                    private: false,
+                    recorded_at: None,
+                },
+            )
+            .await
+            .unwrap()
+            .id()
+            .to_string();
+        queue
+            .approve(&id, ApprovalDecision::default())
+            .await
+            .unwrap();
+        let item = queue.get(&id).await.unwrap().unwrap();
+        let script = temp.path().join("capture-args.sh");
+        write_executable(
+            &script,
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\necho '@@ARKAI_RESULT@@ {{\"message\":\"ok\"}}'\nexit 0\n",
+                args_file.display()
+            ),
+        )
+        .await;
+
+        process_one_item(
+            &queue,
+            &item,
+            None,
+            Some(&script),
+            Some(Duration::from_secs(2)),
+        )
+        .await
+        .unwrap();
+
+        let args = tokio::fs::read_to_string(&args_file).await.unwrap();
+        let lines: Vec<&str> = args.lines().collect();
+        assert_eq!(lines[0], "--prediarized");
+        assert!(lines[1].contains(&id));
+        assert!(!lines.iter().any(|line| *line == "--engine"));
+    }
+
     #[tokio::test]
     async fn test_needs_human_result_records_ping() {
         let temp = TempDir::new().unwrap();
@@ -803,7 +1023,7 @@ mod tests {
         let script = temp.path().join("mixed.sh");
         write_executable(
             &script,
-            "#!/bin/sh\ncase \"$1\" in\n  *first.m4a) echo '@@ARKAI_RESULT@@ {\"error\":\"bad first\"}'; exit 9 ;;\n  *) echo '@@ARKAI_RESULT@@ {\"message\":\"ok\"}'; exit 0 ;;\nesac\n",
+            "#!/bin/sh\ncase \"$3\" in\n  first) echo '@@ARKAI_RESULT@@ {\"error\":\"bad first\"}'; exit 9 ;;\n  *) echo '@@ARKAI_RESULT@@ {\"message\":\"ok\"}'; exit 0 ;;\nesac\n",
         )
         .await;
         let caps = LocalRouteCaps {

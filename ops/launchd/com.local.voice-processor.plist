@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.local.voice-processor</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/alexkamysz/.cargo/bin/arkai</string>
+    <string>voice</string>
+    <string>process</string>
+    <string>--once</string>
+    <string>--limit</string>
+    <string>2</string>
+    <string>--max-hours</string>
+    <string>4</string>
+  </array>
+
+  <key>StartInterval</key>
+  <integer>300</integer>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/alexkamysz/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/Users/alexkamysz/Library/Logs/voice-processor.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/alexkamysz/Library/Logs/voice-processor.log</string>
+</dict>
+</plist>

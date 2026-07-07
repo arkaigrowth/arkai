@@ -32,14 +32,17 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::mpsc;
 
-use super::queue::{compute_file_hash, normalize_audio, EnqueueResult, VoiceQueue};
+use super::queue::{
+    compute_file_hash, normalize_audio, EnqueueMetadata, EnqueueResult, VoiceQueue, VoiceQueueError,
+};
+use super::sources::{VoiceSource, VoiceSourceHandler};
 
 /// Errors that can occur with the watcher
 #[derive(Debug, Error)]
@@ -216,17 +219,14 @@ impl VoiceMemoWatcher {
                 .enqueue(&normalized_path, normalized_size, Utc::now())
                 .await
             {
-                Ok(enqueue_result) => match enqueue_result {
-                    EnqueueResult::Queued(id) => {
-                        result.new_files += 1;
-                        result.new_ids.push(id);
-                    }
-                    EnqueueResult::AlreadyQueued(_) => result.already_queued += 1,
-                    EnqueueResult::AlreadyProcessed(_) => result.already_processed += 1,
-                    EnqueueResult::ResetForRetry(_) => result.reset_for_retry += 1,
-                    EnqueueResult::AlreadySkipped(_) => result.already_skipped += 1,
-                    EnqueueResult::Quarantined(_) => result.quarantined += 1,
-                },
+                Ok(enqueue_result) => apply_enqueue_result(enqueue_result, &mut result),
+                Err(VoiceQueueError::CacheCopy { .. }) => {
+                    tracing::warn!(
+                        path = %normalized_path.display(),
+                        "deferred voice memo; cache copy failed"
+                    );
+                    result.deferred += 1;
+                }
                 Err(e) => {
                     tracing::warn!("Failed to enqueue {}: {}", path.display(), e);
                     result.errors += 1;
@@ -326,6 +326,328 @@ impl ScanResult {
             + self.reset_for_retry
             + self.quarantined
     }
+
+    fn merge(&mut self, other: ScanResult) {
+        self.new_files += other.new_files;
+        self.already_queued += other.already_queued;
+        self.already_processed += other.already_processed;
+        self.already_skipped += other.already_skipped;
+        self.reset_for_retry += other.reset_for_retry;
+        self.quarantined += other.quarantined;
+        self.deferred += other.deferred;
+        self.errors += other.errors;
+        self.new_ids.extend(other.new_ids);
+    }
+}
+
+pub async fn scan_all(sources: &[VoiceSource], queue: &VoiceQueue) -> Result<ScanResult> {
+    check_ffprobe_available().await?;
+
+    let mut aggregate = ScanResult::default();
+    for source in sources {
+        match scan_source(source, queue).await {
+            Ok(result) => aggregate.merge(result),
+            Err(error) => {
+                tracing::warn!(
+                    source = %source.name,
+                    path = %source.path.display(),
+                    error = %error,
+                    "voice source scan failed"
+                );
+                aggregate.errors += 1;
+            }
+        }
+    }
+
+    match queue.cache_sweep().await {
+        Ok(report) => {
+            if report.errors > 0 {
+                aggregate.errors += report.errors;
+            }
+            if report.backfilled > 0 || report.retained > 0 {
+                tracing::info!(
+                    backfilled = report.backfilled,
+                    retained = report.retained,
+                    errors = report.errors,
+                    "voice cache sweep complete"
+                );
+            }
+        }
+        Err(error) => {
+            tracing::warn!(error = %error, "voice cache sweep failed");
+            aggregate.errors += 1;
+        }
+    }
+
+    Ok(aggregate)
+}
+
+async fn scan_source(source: &VoiceSource, queue: &VoiceQueue) -> Result<ScanResult> {
+    match source.handler {
+        VoiceSourceHandler::VoicememosContainer => scan_voicememos_container(source, queue).await,
+        VoiceSourceHandler::PlainAudioDir => scan_plain_audio_dir(source, queue).await,
+        VoiceSourceHandler::PrediarizedTranscript => {
+            scan_prediarized_transcript(source, queue).await
+        }
+    }
+}
+
+async fn scan_voicememos_container(source: &VoiceSource, queue: &VoiceQueue) -> Result<ScanResult> {
+    let mut result = ScanResult::default();
+    let mut entries = tokio::fs::read_dir(&source.path).await?;
+    let extensions = source.effective_extensions();
+    let min_age = source.min_age_secs.unwrap_or(MIN_FILE_AGE_SECS);
+
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        if !extension_matches(&path, &extensions) {
+            continue;
+        }
+
+        let metadata = match tokio::fs::metadata(&path).await {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+
+        let file_size = metadata.len();
+        if should_defer_for_min_age(&metadata, min_age) {
+            tracing::info!("Deferred (too recent): {}", path.display());
+            result.deferred += 1;
+            continue;
+        }
+
+        if is_qta_file(&path) && !validate_audio_readable(&path).await {
+            tracing::info!("Deferred (ffprobe failed): {}", path.display());
+            result.deferred += 1;
+            continue;
+        }
+
+        let normalized_path = match normalize_audio(&path).await {
+            Ok(path) => path,
+            Err(error) => {
+                tracing::info!(
+                    "Deferred (normalize failed): {} - {}",
+                    path.display(),
+                    error
+                );
+                result.deferred += 1;
+                continue;
+            }
+        };
+
+        let normalized_size = match tokio::fs::metadata(&normalized_path).await {
+            Ok(metadata) => metadata.len(),
+            Err(_) => file_size,
+        };
+        let recorded_at = recorded_at_for_path(&path, &metadata);
+        enqueue_scanned_file(
+            queue,
+            &normalized_path,
+            normalized_size,
+            source,
+            "audio",
+            recorded_at,
+            &mut result,
+        )
+        .await;
+    }
+
+    Ok(result)
+}
+
+async fn scan_plain_audio_dir(source: &VoiceSource, queue: &VoiceQueue) -> Result<ScanResult> {
+    let mut result = ScanResult::default();
+    let mut entries = tokio::fs::read_dir(&source.path).await?;
+    let extensions = source.effective_extensions();
+    let min_age = source.min_age_secs.unwrap_or(120);
+
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        if !extension_matches(&path, &extensions) {
+            continue;
+        }
+
+        let metadata = match tokio::fs::metadata(&path).await {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+
+        if should_defer_for_min_age(&metadata, min_age) {
+            tracing::info!("Deferred (too recent): {}", path.display());
+            result.deferred += 1;
+            continue;
+        }
+
+        if !validate_audio_readable(&path).await {
+            tracing::info!("Deferred (ffprobe failed): {}", path.display());
+            result.deferred += 1;
+            continue;
+        }
+
+        enqueue_scanned_file(
+            queue,
+            &path,
+            metadata.len(),
+            source,
+            "audio",
+            recorded_at_for_path(&path, &metadata),
+            &mut result,
+        )
+        .await;
+    }
+
+    Ok(result)
+}
+
+async fn scan_prediarized_transcript(
+    source: &VoiceSource,
+    queue: &VoiceQueue,
+) -> Result<ScanResult> {
+    let mut result = ScanResult::default();
+    let mut entries = tokio::fs::read_dir(&source.path).await?;
+    let extensions = source.effective_extensions();
+    let min_age = source.min_age_secs.unwrap_or(120);
+
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        if !extension_matches(&path, &extensions) {
+            continue;
+        }
+
+        let metadata = match tokio::fs::metadata(&path).await {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+
+        if should_defer_for_min_age(&metadata, min_age) {
+            tracing::info!("Deferred (too recent): {}", path.display());
+            result.deferred += 1;
+            continue;
+        }
+
+        if metadata.len() == 0 {
+            tracing::info!("Deferred (empty transcript): {}", path.display());
+            result.deferred += 1;
+            continue;
+        }
+
+        enqueue_scanned_file(
+            queue,
+            &path,
+            metadata.len(),
+            source,
+            "prediarized",
+            recorded_at_for_path(&path, &metadata),
+            &mut result,
+        )
+        .await;
+    }
+
+    Ok(result)
+}
+
+async fn enqueue_scanned_file(
+    queue: &VoiceQueue,
+    path: &Path,
+    file_size: u64,
+    source: &VoiceSource,
+    kind: &str,
+    recorded_at: Option<DateTime<Utc>>,
+    result: &mut ScanResult,
+) {
+    match queue
+        .enqueue_with_metadata(
+            path,
+            file_size,
+            Utc::now(),
+            EnqueueMetadata {
+                source: Some(source.name.clone()),
+                kind: Some(kind.to_string()),
+                private: source.private,
+                recorded_at,
+            },
+        )
+        .await
+    {
+        Ok(enqueue_result) => apply_enqueue_result(enqueue_result, result),
+        Err(VoiceQueueError::CacheCopy { .. }) => {
+            tracing::warn!(path = %path.display(), "deferred voice source file; cache copy failed");
+            result.deferred += 1;
+        }
+        Err(error) => {
+            tracing::warn!("Failed to enqueue {}: {}", path.display(), error);
+            result.errors += 1;
+        }
+    }
+}
+
+fn apply_enqueue_result(enqueue_result: EnqueueResult, result: &mut ScanResult) {
+    match enqueue_result {
+        EnqueueResult::Queued(id) => {
+            result.new_files += 1;
+            result.new_ids.push(id);
+        }
+        EnqueueResult::AlreadyQueued(_) => result.already_queued += 1,
+        EnqueueResult::AlreadyProcessed(_) => result.already_processed += 1,
+        EnqueueResult::ResetForRetry(_) => result.reset_for_retry += 1,
+        EnqueueResult::AlreadySkipped(_) => result.already_skipped += 1,
+        EnqueueResult::Quarantined(_) => result.quarantined += 1,
+    }
+}
+
+fn extension_matches(path: &Path, extensions: &[String]) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            extensions
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(ext))
+        })
+        .unwrap_or(false)
+}
+
+fn should_defer_for_min_age(metadata: &std::fs::Metadata, min_age_secs: u64) -> bool {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|mtime| mtime.elapsed().ok())
+        .map(|age| age < Duration::from_secs(min_age_secs))
+        .unwrap_or(false)
+}
+
+/// `recorded_at` semantics: LOCAL wall-clock recording time stored under a UTC
+/// label (filenames carry naive local time; the birthtime fallback is converted
+/// to match). The consumer formats it back naively as `--when "%Y-%m-%d %H:%M"`.
+fn recorded_at_for_path(path: &Path, metadata: &std::fs::Metadata) -> Option<DateTime<Utc>> {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .and_then(parse_recorded_at_from_filename)
+        .or_else(|| {
+            metadata.created().ok().map(|created| {
+                chrono::DateTime::<chrono::Local>::from(created)
+                    .naive_local()
+                    .and_utc()
+            })
+        })
+}
+
+pub fn parse_recorded_at_from_filename(file_name: &str) -> Option<DateTime<Utc>> {
+    let stem = Path::new(file_name).file_stem()?.to_str()?;
+    let voice_memos = stem.strip_prefix("New Recording - ").unwrap_or(stem);
+
+    NaiveDateTime::parse_from_str(voice_memos, "%Y-%m-%d %H-%M-%S")
+        .or_else(|_| NaiveDateTime::parse_from_str(stem, "%Y%m%d %H%M%S"))
+        .ok()
+        .map(|dt| dt.and_utc())
 }
 
 /// Stability tracking for a pending file
@@ -598,9 +920,6 @@ async fn run_watcher(
                 }
             };
 
-            // Successfully normalized - NOW remove from pending
-            pending.remove(&path);
-
             // Get normalized file size
             let normalized_size = match tokio::fs::metadata(&normalized_path).await {
                 Ok(m) => m.len(),
@@ -623,6 +942,7 @@ async fn run_watcher(
                         .await
                     {
                         Ok(result) => {
+                            pending.remove(&path);
                             if result.is_new() {
                                 tracing::info!(
                                     "New audio file queued: {} ({})",
@@ -637,7 +957,17 @@ async fn run_watcher(
                                 );
                             }
                         }
+                        Err(VoiceQueueError::CacheCopy { .. }) => {
+                            tracing::warn!(
+                                path = %normalized_path.display(),
+                                "deferred voice memo; cache copy failed"
+                            );
+                            if let Some(state) = pending.get_mut(&path) {
+                                state.reset_for_retry();
+                            }
+                        }
                         Err(e) => {
+                            pending.remove(&path);
                             tracing::warn!(
                                 "Failed to enqueue {}: {}",
                                 normalized_path.display(),
@@ -816,5 +1146,101 @@ mod tests {
             result2.already_queued, 2,
             "Files should show as already queued"
         );
+    }
+
+    fn test_source(name: &str, path: &Path, handler: VoiceSourceHandler) -> VoiceSource {
+        VoiceSource {
+            name: name.to_string(),
+            path: path.to_path_buf(),
+            handler,
+            private: false,
+            category: None,
+            extensions: None,
+            min_age_secs: Some(0),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_scan_all_isolates_missing_source_root() {
+        let temp = TempDir::new().unwrap();
+        let transcript_dir = temp.path().join("transcripts");
+        tokio::fs::create_dir_all(&transcript_dir).await.unwrap();
+        tokio::fs::write(transcript_dir.join("meeting.md"), b"# Meeting")
+            .await
+            .unwrap();
+        let queue = VoiceQueue::new(temp.path().join("queue.jsonl"));
+        let sources = vec![
+            test_source(
+                "missing",
+                &temp.path().join("missing"),
+                VoiceSourceHandler::PlainAudioDir,
+            ),
+            test_source(
+                "prediarized",
+                &transcript_dir,
+                VoiceSourceHandler::PrediarizedTranscript,
+            ),
+        ];
+
+        let result = scan_all(&sources, &queue).await.unwrap();
+
+        assert_eq!(result.errors, 1);
+        assert_eq!(result.new_files, 1);
+    }
+
+    #[tokio::test]
+    async fn test_plain_audio_dir_ffprobe_gate_defers_unprobeable_file() {
+        let temp = TempDir::new().unwrap();
+        let media_dir = temp.path().join("media");
+        tokio::fs::create_dir_all(&media_dir).await.unwrap();
+        tokio::fs::write(media_dir.join("bad.m4a"), b"not really audio")
+            .await
+            .unwrap();
+        let queue = VoiceQueue::new(temp.path().join("queue.jsonl"));
+        let sources = vec![test_source(
+            "media",
+            &media_dir,
+            VoiceSourceHandler::PlainAudioDir,
+        )];
+
+        let result = scan_all(&sources, &queue).await.unwrap();
+
+        assert_eq!(result.deferred, 1);
+        assert_eq!(result.new_files, 0);
+        assert!(queue.replay().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_prediarized_enqueue_sets_kind() {
+        let temp = TempDir::new().unwrap();
+        let transcript_dir = temp.path().join("exports");
+        tokio::fs::create_dir_all(&transcript_dir).await.unwrap();
+        tokio::fs::write(transcript_dir.join("call.txt"), b"Speaker 1: hello")
+            .await
+            .unwrap();
+        let queue = VoiceQueue::new(temp.path().join("queue.jsonl"));
+        let sources = vec![test_source(
+            "exports",
+            &transcript_dir,
+            VoiceSourceHandler::PrediarizedTranscript,
+        )];
+
+        let result = scan_all(&sources, &queue).await.unwrap();
+        let item = queue.get(&result.new_ids[0]).await.unwrap().unwrap();
+
+        assert_eq!(result.new_files, 1);
+        assert_eq!(item.data.source.as_deref(), Some("exports"));
+        assert_eq!(item.data.kind.as_deref(), Some("prediarized"));
+    }
+
+    #[test]
+    fn test_recorded_at_filename_parsers() {
+        let voice_memos =
+            parse_recorded_at_from_filename("New Recording - 2026-05-20 15-45-16.m4a").unwrap();
+        let compact = parse_recorded_at_from_filename("20260520 154516.m4a").unwrap();
+
+        assert_eq!(voice_memos.to_rfc3339(), "2026-05-20T15:45:16+00:00");
+        assert_eq!(compact.to_rfc3339(), "2026-05-20T15:45:16+00:00");
+        assert!(parse_recorded_at_from_filename("meeting.m4a").is_none());
     }
 }

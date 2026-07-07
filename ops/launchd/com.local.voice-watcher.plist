@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.local.voice-watcher</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/alexkamysz/.cargo/bin/arkai</string>
+    <string>voice</string>
+    <string>scan</string>
+  </array>
+
+  <key>StartInterval</key>
+  <integer>90</integer>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/alexkamysz/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/Users/alexkamysz/Library/Logs/voice-watcher.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/alexkamysz/Library/Logs/voice-watcher.log</string>
+</dict>
+</plist>
