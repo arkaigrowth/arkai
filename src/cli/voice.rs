@@ -19,7 +19,8 @@ use crate::ingest::local_route::{
     alert_on_corrupt_queue_if_needed, execute_process_local, LocalRouteCaps,
 };
 use crate::ingest::queue::ApprovalDecision;
-use crate::ingest::{transcribe, VoiceMemoWatcher, VoiceQueue, WatcherConfig};
+use crate::ingest::sources::{load_voice_sources, VoiceSource, VoiceSourceHandler};
+use crate::ingest::{scan_all, transcribe, VoiceMemoWatcher, VoiceQueue, WatcherConfig};
 
 /// Voice capture subcommands
 #[derive(Subcommand, Debug)]
@@ -300,37 +301,58 @@ async fn execute_status() -> Result<()> {
 
 /// Scan directory and queue files
 async fn execute_scan(path: Option<String>) -> Result<()> {
-    let mut config = WatcherConfig::default();
-    if let Some(p) = path {
-        config.watch_path = p.into();
+    let queue = VoiceQueue::open_default().await?;
+    let sources = match build_scan_sources(path) {
+        Ok(sources) => sources,
+        Err(error) => {
+            ping_healthcheck(true).await;
+            return Err(error);
+        }
+    };
+    let voicememos_canary_path = sources
+        .iter()
+        .find(|source| {
+            source.name == "voicememos" && source.handler == VoiceSourceHandler::VoicememosContainer
+        })
+        .map(|source| source.path.clone());
+
+    if sources.len() == 1 {
+        println!("📂 Scanning: {}", sources[0].path.display());
+    } else {
+        println!("📂 Scanning {} voice sources", sources.len());
     }
 
-    println!("📂 Scanning: {}", config.watch_path.display());
-
-    let watcher = VoiceMemoWatcher::with_config(config);
-    let queue = VoiceQueue::open_default().await?;
-
     let notifier = build_default_notifier();
-    let result = match watcher.scan_once(&queue).await {
+    let result = match scan_all(&sources, &queue).await {
         Ok(result) => result,
         Err(error) => {
             ping_healthcheck(true).await;
             return Err(error);
         }
     };
-    let empty_watch_dir = watch_dir_empty(watcher.config().watch_path.as_path())
-        .await
-        .unwrap_or(false);
 
-    if empty_watch_dir {
-        tracing::warn!(
-            path = %watcher.config().watch_path.display(),
-            "voice watch directory is empty after a successful scan"
-        );
-        ping_healthcheck(true).await;
-    } else {
-        ping_healthcheck(false).await;
+    let mut canary_failed = false;
+    if let Some(path) = voicememos_canary_path {
+        match watch_dir_empty(&path).await {
+            Ok(true) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    "voice watch directory is empty after a successful scan"
+                );
+                canary_failed = true;
+            }
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %error,
+                    "voice watch directory canary failed"
+                );
+                canary_failed = true;
+            }
+        }
     }
+    ping_healthcheck(canary_failed).await;
 
     if let Err(error) = alert_on_corrupt_queue_if_needed(&queue, notifier.as_deref()).await {
         tracing::warn!("corrupt queue alert check failed: {}", error);
@@ -364,6 +386,22 @@ async fn execute_scan(path: Option<String>) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn build_scan_sources(path: Option<String>) -> Result<Vec<VoiceSource>> {
+    if let Some(path) = path {
+        return Ok(vec![VoiceSource {
+            name: "cli-path".to_string(),
+            path: path.into(),
+            handler: VoiceSourceHandler::PlainAudioDir,
+            private: false,
+            category: None,
+            extensions: None,
+            min_age_secs: None,
+        }]);
+    }
+
+    load_voice_sources()
 }
 
 async fn watch_dir_empty(path: &std::path::Path) -> std::io::Result<bool> {

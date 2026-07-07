@@ -84,6 +84,13 @@ pub(crate) fn redact_send_error(e: anyhow::Error) -> anyhow::Error {
 
 /// Build the plain-text approval card.
 pub(crate) fn format_approval_card(item: &QueueItem) -> String {
+    if item.data.private {
+        return format!(
+            "🔒 A private recording awaits approval\n\nID: {id}\n\narkai voice approve {id} | arkai voice skip {id}",
+            id = item.id
+        );
+    }
+
     format!(
         "🔔 New voice memo awaiting approval\n\
          \n\
@@ -99,6 +106,13 @@ pub(crate) fn format_approval_card(item: &QueueItem) -> String {
 }
 
 pub(crate) fn format_failed_card(item: &QueueItem, reason: &str) -> String {
+    if item.data.private {
+        return format!(
+            "❌ Private voice memo processing failed\n\nID: {id}\n\nprocessing failed — check arkai voice list\n\narkai voice retry {id}",
+            id = item.id
+        );
+    }
+
     format!(
         "❌ Voice memo processing failed\n\
          \n\
@@ -114,6 +128,13 @@ pub(crate) fn format_failed_card(item: &QueueItem, reason: &str) -> String {
 }
 
 pub(crate) fn format_needs_human_card(item: &QueueItem, detail: &str) -> String {
+    if item.data.private {
+        return format!(
+            "⚠️ Private voice memo needs review\n\nID: {id}\n\nprocessing failed — check arkai voice list",
+            id = item.id
+        );
+    }
+
     format!(
         "⚠️ Needs review\n\
          \n\
@@ -297,6 +318,9 @@ mod tests {
                 detected_at: Utc::now(),
                 duration_seconds: Some(462.0),
                 recorded_at: None,
+                source: None,
+                kind: Some("audio".to_string()),
+                private: false,
             },
             started_at: None,
             completed_at: None,
@@ -377,6 +401,24 @@ mod tests {
     }
 
     #[test]
+    fn test_private_approval_card_redacts_name_and_duration() {
+        let mut item = sample_item();
+        item.data.private = true;
+
+        let card = format_approval_card(&item);
+
+        assert_eq!(
+            card,
+            format!(
+                "🔒 A private recording awaits approval\n\nID: {id}\n\narkai voice approve {id} | arkai voice skip {id}",
+                id = item.id
+            )
+        );
+        assert!(!card.contains("Memo 3.m4a"));
+        assert!(!card.contains("7m42s"));
+    }
+
+    #[test]
     fn test_failed_card_contains_retry_and_reason() {
         let item = sample_item();
         let card = format_failed_card(&item, "transient: unavailable");
@@ -385,6 +427,23 @@ mod tests {
         assert!(card.contains("Memo 3.m4a"));
         assert!(card.contains("transient: unavailable"));
         assert!(card.contains(&format!("arkai voice retry {}", item.id)));
+    }
+
+    #[test]
+    fn test_private_failed_and_needs_human_cards_redact_details() {
+        let mut item = sample_item();
+        item.data.private = true;
+
+        let failed = format_failed_card(&item, "source unreadable: /private/path");
+        let needs_human = format_needs_human_card(&item, "speaker names leaked");
+
+        for card in [failed, needs_human] {
+            assert!(card.contains(&item.id));
+            assert!(card.contains("processing failed — check arkai voice list"));
+            assert!(!card.contains("Memo 3.m4a"));
+            assert!(!card.contains("source unreadable"));
+            assert!(!card.contains("speaker names leaked"));
+        }
     }
 
     #[test]

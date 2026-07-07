@@ -18,12 +18,14 @@
 
 pub mod local_route;
 pub mod queue;
+pub mod sources;
 pub mod transcriber;
 pub mod watcher;
 pub mod youtube;
 
 // Re-export key types
 pub use queue::{QueueItem, VoiceQueue, VoiceQueueError};
+pub use sources::{VoiceSource, VoiceSourceHandler};
 pub use transcriber::{transcribe, TranscriptResult};
-pub use watcher::{AudioFileEvent, VoiceMemoWatcher, WatcherConfig};
+pub use watcher::{scan_all, AudioFileEvent, VoiceMemoWatcher, WatcherConfig};
 pub use youtube::{fetch_youtube_transcript, YouTubeTranscript};
