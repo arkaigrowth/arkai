@@ -15,6 +15,9 @@ use clap::Subcommand;
 use crate::adapters::{
     build_default_notifier, notify_best_effort, ClawdbotClient, NotifyKind, TelegramClient,
 };
+use crate::ingest::local_route::{
+    alert_on_corrupt_queue_if_needed, execute_process_local, LocalRouteCaps,
+};
 use crate::ingest::queue::ApprovalDecision;
 use crate::ingest::{transcribe, VoiceMemoWatcher, VoiceQueue, WatcherConfig};
 
@@ -87,14 +90,14 @@ pub enum VoiceCommands {
         path: Option<String>,
     },
 
-    /// Process pending voice memos (send to Claudia via Telegram or Clawdbot)
+    /// Process pending voice memos
     Process {
         /// Process only one item and exit
         #[arg(long)]
         once: bool,
 
-        /// Route: "telegram" (send raw audio) or "clawdbot" (transcribe + send text)
-        #[arg(long, default_value = "telegram")]
+        /// Route: "local" (transcribe-memo), "telegram" (send raw audio), or "clawdbot"
+        #[arg(long, default_value = "local")]
         route: String,
 
         /// Whisper model for transcription (clawdbot route only)
@@ -308,7 +311,30 @@ async fn execute_scan(path: Option<String>) -> Result<()> {
     let queue = VoiceQueue::open_default().await?;
 
     let notifier = build_default_notifier();
-    let result = watcher.scan_once(&queue).await?;
+    let result = match watcher.scan_once(&queue).await {
+        Ok(result) => result,
+        Err(error) => {
+            ping_healthcheck(true).await;
+            return Err(error);
+        }
+    };
+    let empty_watch_dir = watch_dir_empty(watcher.config().watch_path.as_path())
+        .await
+        .unwrap_or(false);
+
+    if empty_watch_dir {
+        tracing::warn!(
+            path = %watcher.config().watch_path.display(),
+            "voice watch directory is empty after a successful scan"
+        );
+        ping_healthcheck(true).await;
+    } else {
+        ping_healthcheck(false).await;
+    }
+
+    if let Err(error) = alert_on_corrupt_queue_if_needed(&queue, notifier.as_deref()).await {
+        tracing::warn!("corrupt queue alert check failed: {}", error);
+    }
 
     println!();
     println!("Scan Results:");
@@ -317,6 +343,7 @@ async fn execute_scan(path: Option<String>) -> Result<()> {
     println!("  Already processed:   {}", result.already_processed);
     println!("  Already skipped:     {}", result.already_skipped);
     println!("  Reset for retry:     {}", result.reset_for_retry);
+    println!("  Quarantined:         {}", result.quarantined);
     if result.deferred > 0 {
         println!("  Deferred (syncing):  {}", result.deferred);
     }
@@ -337,6 +364,55 @@ async fn execute_scan(path: Option<String>) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn watch_dir_empty(path: &std::path::Path) -> std::io::Result<bool> {
+    let mut entries = tokio::fs::read_dir(path).await?;
+    Ok(entries.next_entry().await?.is_none())
+}
+
+async fn ping_healthcheck(fail: bool) {
+    let Some(url) = read_healthcheck_url().await else {
+        return;
+    };
+    let target = if fail {
+        format!("{}/fail", url.trim_end_matches('/'))
+    } else {
+        url
+    };
+
+    // Use curl as a subprocess rather than reqwest: LuLu/firewall rules match
+    // binary paths, so curl keeps the healthcheck on a separate network identity
+    // from arkai's own HTTP clients.
+    match tokio::process::Command::new("curl")
+        .args(["-fsS", "-m", "10"])
+        .arg(&target)
+        .status()
+        .await
+    {
+        Ok(status) if status.success() => {}
+        Ok(status) => tracing::warn!(
+            target = %target,
+            status = %status,
+            "healthcheck curl failed"
+        ),
+        Err(error) => tracing::warn!(
+            target = %target,
+            error = %error,
+            "healthcheck curl could not start"
+        ),
+    }
+}
+
+async fn read_healthcheck_url() -> Option<String> {
+    let path = crate::config::arkai_home().ok()?.join("hc_ping_url");
+    let contents = tokio::fs::read_to_string(path).await.ok()?;
+    let url = contents.lines().next().map(str::trim).unwrap_or_default();
+    if url.is_empty() {
+        None
+    } else {
+        Some(url.to_string())
+    }
 }
 
 /// Watch for new files
@@ -455,11 +531,22 @@ async fn execute_process(
     }
 
     match route {
+        "local" => {
+            let notifier = build_default_notifier();
+            let local_caps = LocalRouteCaps {
+                limit: caps.limit,
+                max_hours: caps.max_hours,
+            };
+            execute_process_local(once, &queue, &local_caps, notifier.as_deref()).await
+        }
         "telegram" => execute_process_telegram(once, bot_token, chat_id, &queue, &caps).await,
         "clawdbot" => {
             execute_process_clawdbot(once, model, chat_id.as_deref(), &queue, &caps).await
         }
-        _ => anyhow::bail!("Unknown route: {}. Use 'telegram' or 'clawdbot'", route),
+        _ => anyhow::bail!(
+            "Unknown route: {}. Use 'local', 'telegram', or 'clawdbot'",
+            route
+        ),
     }
 }
 

@@ -16,6 +16,7 @@
 //!                   events.jsonl
 //! ```
 
+pub mod local_route;
 pub mod queue;
 pub mod transcriber;
 pub mod watcher;
