@@ -1,0 +1,30 @@
+# arkai CI — gates the voice-spine invariants on every push.
+# Inert until `main` is reconciled with origin and pushed (see
+# ~/AI/voice-memo-pipeline/docs/SPINE-STEELMAN-M3M4.md finding I9); until then the same
+# suite runs locally via the pre-commit hook installed from ops/ci/.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    runs-on: macos-latest # flock/launchd-adjacent code paths target macOS; keep CI on the same OS
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Install ffmpeg (ffprobe is a hard runtime dep of the watcher tests)
+        run: brew install ffmpeg
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test (queue-gate invariants, lock, notifier, local route, multi-source)
+        run: cargo test
