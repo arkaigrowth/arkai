@@ -13,7 +13,8 @@ use chrono::Utc;
 use clap::Subcommand;
 
 use crate::adapters::{
-    build_default_notifier, notify_best_effort, ClawdbotClient, NotifyKind, TelegramClient,
+    build_default_notifier, notify_best_effort, notify_new_awaiting_capped, ClawdbotClient,
+    NotifyKind, TelegramClient,
 };
 use crate::ingest::local_route::{
     alert_on_corrupt_queue_if_needed, execute_process_local, LocalRouteCaps,
@@ -379,11 +380,13 @@ async fn execute_scan(path: Option<String>) -> Result<()> {
         println!("✅ {} new file(s) added to queue", result.new_files);
     }
 
+    let mut new_items = Vec::new();
     for id in &result.new_ids {
         if let Ok(Some(item)) = queue.get(id).await {
-            notify_best_effort(notifier.as_deref(), &item, NotifyKind::NewAwaiting).await;
+            new_items.push(item);
         }
     }
+    notify_new_awaiting_capped(notifier.as_deref(), &new_items).await;
 
     Ok(())
 }
@@ -476,11 +479,13 @@ async fn execute_watch(once: bool, path: Option<String>) -> Result<()> {
             println!("ℹ️  No new files to queue");
         }
 
+        let mut new_items = Vec::new();
         for id in &result.new_ids {
             if let Ok(Some(item)) = queue.get(id).await {
-                notify_best_effort(notifier.as_deref(), &item, NotifyKind::NewAwaiting).await;
+                new_items.push(item);
             }
         }
+        notify_new_awaiting_capped(notifier.as_deref(), &new_items).await;
 
         return Ok(());
     }
@@ -496,11 +501,13 @@ async fn execute_watch(once: bool, path: Option<String>) -> Result<()> {
         println!("📥 Initial scan: {} new file(s) queued", initial.new_files);
     }
 
+    let mut initial_items = Vec::new();
     for id in &initial.new_ids {
         if let Ok(Some(item)) = queue.get(id).await {
-            notify_best_effort(notifier.as_deref(), &item, NotifyKind::NewAwaiting).await;
+            initial_items.push(item);
         }
     }
+    notify_new_awaiting_capped(notifier.as_deref(), &initial_items).await;
 
     // Start watching
     let watch_queue = Arc::clone(&queue);
