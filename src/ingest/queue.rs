@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
+use std::time::Duration;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -19,6 +20,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::domain::VoiceQueueStatus;
+
+const AUTO_RETRY_CAP: u32 = 1;
+const STALE_PROCESSING_BACKSTOP_SECS: i64 = 24 * 60 * 60;
+const PID_REUSE_GRACE_SECS: i64 = 5;
 
 /// Errors that can occur with the voice queue
 #[derive(Debug, Error)]
@@ -117,6 +122,16 @@ pub struct ApprovalDecision {
     pub decided_at: DateTime<Utc>,
 }
 
+/// Processing metadata recorded with `ProcessingStarted` in M3.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProcessingStartedData {
+    #[serde(default)]
+    pub pid: Option<u32>,
+
+    #[serde(default)]
+    pub proc_start_epoch: Option<i64>,
+}
+
 /// Metadata for a queued audio file
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueueItemData {
@@ -135,6 +150,10 @@ pub struct QueueItemData {
     /// Audio duration in seconds (populated via ffprobe)
     #[serde(default)]
     pub duration_seconds: Option<f32>,
+
+    /// Original recording timestamp, populated by later source scanners.
+    #[serde(default)]
+    pub recorded_at: Option<DateTime<Utc>>,
 }
 
 /// A queue item with current state (derived from replaying events)
@@ -175,6 +194,31 @@ pub struct QueueItem {
 
     /// When a human approval decision was recorded
     pub decided_at: Option<DateTime<Utc>>,
+
+    /// PID recorded when the current processing attempt started.
+    pub pid: Option<u32>,
+
+    /// Process start epoch recorded with `pid`.
+    pub proc_start_epoch: Option<i64>,
+
+    /// Count of `ProcessingStarted` events derived during replay.
+    pub attempt_count: u32,
+
+    /// Count of automatic reset events derived during replay.
+    pub auto_reset_count: u32,
+}
+
+/// Additional replay counters for operational alerts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReplayStats {
+    pub skipped_lines: usize,
+}
+
+/// Result of a stale-processing reaper pass.
+#[derive(Debug, Clone, Default)]
+pub struct ReapReport {
+    pub reset_for_retry: Vec<String>,
+    pub quarantined: Vec<QueueItem>,
 }
 
 /// JSONL-based voice queue
@@ -230,6 +274,12 @@ fn approval_overrides(decision: &ApprovalDecision) -> Option<serde_json::Value> 
     } else {
         Some(serde_json::Value::Object(overrides))
     }
+}
+
+fn reset_trigger_is_auto(data: Option<&serde_json::Value>) -> bool {
+    data.and_then(|value| value.get("trigger"))
+        .and_then(|trigger| trigger.as_str())
+        == Some("auto")
 }
 
 impl VoiceQueue {
@@ -319,46 +369,47 @@ impl VoiceQueue {
 
     /// Replay all events to build current state
     pub async fn replay(&self) -> Result<HashMap<String, QueueItem>, VoiceQueueError> {
+        let (items, _) = self.replay_with_stats().await?;
+        Ok(items)
+    }
+
+    /// Replay all events and return operational stats.
+    ///
+    /// No compaction exists yet; when compaction is added, preserve a `.bak`
+    /// before rewriting so skipped-line evidence is not silently destroyed.
+    pub async fn replay_with_stats(
+        &self,
+    ) -> Result<(HashMap<String, QueueItem>, ReplayStats), VoiceQueueError> {
         let mut items: HashMap<String, QueueItem> = HashMap::new();
+        let mut stats = ReplayStats::default();
 
         if !self.queue_path.exists() {
-            return Ok(items);
+            return Ok((items, stats));
         }
 
         let file = File::open(&self.queue_path).await?;
         let reader = BufReader::new(file);
         let mut lines = reader.lines();
-        let mut buffered_line: Option<String> = None;
 
         while let Some(line) = lines.next_line().await? {
-            let Some(previous_line) = buffered_line.replace(line) else {
-                continue;
-            };
-
-            if previous_line.trim().is_empty() {
+            if line.trim().is_empty() {
                 continue;
             }
 
-            let event: QueueEvent = serde_json::from_str(&previous_line)?;
-            Self::apply_event(&mut items, event);
-        }
-
-        if let Some(final_line) = buffered_line {
-            if !final_line.trim().is_empty() {
-                match serde_json::from_str::<QueueEvent>(&final_line) {
-                    Ok(event) => Self::apply_event(&mut items, event),
-                    Err(error) => {
-                        tracing::warn!(
-                            "Skipping malformed final voice queue line in {}: {}",
-                            self.queue_path.display(),
-                            error
-                        );
-                    }
+            match serde_json::from_str::<QueueEvent>(&line) {
+                Ok(event) => Self::apply_event(&mut items, event),
+                Err(error) => {
+                    stats.skipped_lines += 1;
+                    tracing::warn!(
+                        "Skipping malformed voice queue line in {}: {}",
+                        self.queue_path.display(),
+                        error
+                    );
                 }
             }
         }
 
-        Ok(items)
+        Ok((items, stats))
     }
 
     /// Apply a single event to the state
@@ -382,6 +433,10 @@ impl VoiceQueue {
                                 overrides: None,
                                 allow_large: false,
                                 decided_at: None,
+                                pid: None,
+                                proc_start_epoch: None,
+                                attempt_count: 0,
+                                auto_reset_count: 0,
                             },
                         );
                     }
@@ -412,20 +467,31 @@ impl VoiceQueue {
             }
             QueueEventType::ProcessingStarted => {
                 if let Some(item) = items.get_mut(&event.item_id) {
+                    let data = event
+                        .data
+                        .and_then(|data| serde_json::from_value::<ProcessingStartedData>(data).ok())
+                        .unwrap_or_default();
                     item.status = VoiceQueueStatus::Processing;
                     item.started_at = Some(event.timestamp);
+                    item.pid = data.pid;
+                    item.proc_start_epoch = data.proc_start_epoch;
+                    item.attempt_count += 1;
                 }
             }
             QueueEventType::Completed => {
                 if let Some(item) = items.get_mut(&event.item_id) {
                     item.status = VoiceQueueStatus::Done;
                     item.completed_at = Some(event.timestamp);
+                    item.pid = None;
+                    item.proc_start_epoch = None;
                 }
             }
             QueueEventType::Failed => {
                 if let Some(item) = items.get_mut(&event.item_id) {
                     item.status = VoiceQueueStatus::Failed;
                     item.completed_at = Some(event.timestamp);
+                    item.pid = None;
+                    item.proc_start_epoch = None;
                     if let Some(data) = event.data {
                         if let Some(error) = data.get("error").and_then(|e| e.as_str()) {
                             item.error = Some(error.to_string());
@@ -435,6 +501,9 @@ impl VoiceQueue {
             }
             QueueEventType::ResetForRetry => {
                 if let Some(item) = items.get_mut(&event.item_id) {
+                    if reset_trigger_is_auto(event.data.as_ref()) {
+                        item.auto_reset_count += 1;
+                    }
                     item.status = if item.approved_once {
                         VoiceQueueStatus::Pending
                     } else {
@@ -444,6 +513,8 @@ impl VoiceQueue {
                     item.error = None;
                     item.started_at = None;
                     item.completed_at = None;
+                    item.pid = None;
+                    item.proc_start_epoch = None;
                 }
             }
             QueueEventType::Unknown => {}
@@ -494,6 +565,7 @@ impl VoiceQueue {
             file_size,
             detected_at,
             duration_seconds,
+            recorded_at: None,
         };
 
         self.with_queue_lock(|| async {
@@ -505,12 +577,16 @@ impl VoiceQueue {
                         return Ok(EnqueueResult::AlreadyProcessed(hash.clone()));
                     }
                     VoiceQueueStatus::Failed => {
-                        // Reset for retry
+                        if existing.auto_reset_count >= AUTO_RETRY_CAP {
+                            return Ok(EnqueueResult::Quarantined(hash.clone()));
+                        }
+
+                        // Reset for one automatic retry
                         let event = QueueEvent {
                             timestamp: Utc::now(),
                             item_id: hash.clone(),
                             event_type: QueueEventType::ResetForRetry,
-                            data: None,
+                            data: Some(serde_json::json!({ "trigger": "auto" })),
                         };
                         self.append_event(&event).await?;
                         return Ok(EnqueueResult::ResetForRetry(hash.clone()));
@@ -594,6 +670,39 @@ impl VoiceQueue {
         .await
     }
 
+    /// Mark an item as processing and record M3 reaper metadata.
+    pub async fn mark_processing_with_attempt(&self, id: &str) -> Result<(), VoiceQueueError> {
+        self.with_queue_lock(|| async {
+            let items = self.replay().await?;
+            let item = items
+                .get(id)
+                .ok_or_else(|| VoiceQueueError::NotFound(id.to_string()))?;
+
+            if item.status != VoiceQueueStatus::Pending {
+                return Err(VoiceQueueError::InvalidTransition {
+                    from: item.status,
+                    to: VoiceQueueStatus::Processing,
+                });
+            }
+
+            let now = Utc::now();
+            let data = ProcessingStartedData {
+                pid: Some(std::process::id()),
+                proc_start_epoch: Some(now.timestamp()),
+            };
+            let event = QueueEvent {
+                timestamp: now,
+                item_id: id.to_string(),
+                event_type: QueueEventType::ProcessingStarted,
+                data: Some(serde_json::to_value(data)?),
+            };
+            self.append_event(&event).await?;
+
+            Ok(())
+        })
+        .await
+    }
+
     /// Mark an item as done
     pub async fn mark_done(&self, id: &str) -> Result<(), VoiceQueueError> {
         self.with_queue_lock(|| async {
@@ -619,9 +728,18 @@ impl VoiceQueue {
     pub async fn mark_failed(&self, id: &str, error: &str) -> Result<(), VoiceQueueError> {
         self.with_queue_lock(|| async {
             let items = self.replay().await?;
-            items
+            let item = items
                 .get(id)
                 .ok_or_else(|| VoiceQueueError::NotFound(id.to_string()))?;
+
+            if item.status != VoiceQueueStatus::Processing
+                && item.status != VoiceQueueStatus::Pending
+            {
+                return Err(VoiceQueueError::InvalidTransition {
+                    from: item.status,
+                    to: VoiceQueueStatus::Failed,
+                });
+            }
 
             let event = QueueEvent {
                 timestamp: Utc::now(),
@@ -725,11 +843,54 @@ impl VoiceQueue {
                 timestamp: Utc::now(),
                 item_id,
                 event_type: QueueEventType::ResetForRetry,
-                data: None,
+                data: Some(serde_json::json!({ "trigger": "human" })),
             };
             self.append_event(&event).await?;
 
             Ok(())
+        })
+        .await
+    }
+
+    /// Reap stale `Processing` items and either reset once or quarantine at the cap.
+    pub async fn reap_stale_processing(&self) -> Result<ReapReport, VoiceQueueError> {
+        self.with_queue_lock(|| async {
+            let items = self.replay().await?;
+            let now = Utc::now();
+            let mut report = ReapReport::default();
+            let processing_items: Vec<QueueItem> = items
+                .values()
+                .filter(|item| item.status == VoiceQueueStatus::Processing)
+                .cloned()
+                .collect();
+
+            for item in processing_items {
+                if !is_stale_processing_item(&item, now).await {
+                    continue;
+                }
+
+                if item.auto_reset_count >= AUTO_RETRY_CAP {
+                    let event = QueueEvent {
+                        timestamp: Utc::now(),
+                        item_id: item.id.clone(),
+                        event_type: QueueEventType::Failed,
+                        data: Some(serde_json::json!({ "error": "reaped at retry cap" })),
+                    };
+                    self.append_event(&event).await?;
+                    report.quarantined.push(item);
+                } else {
+                    let event = QueueEvent {
+                        timestamp: Utc::now(),
+                        item_id: item.id.clone(),
+                        event_type: QueueEventType::ResetForRetry,
+                        data: Some(serde_json::json!({ "trigger": "auto" })),
+                    };
+                    self.append_event(&event).await?;
+                    report.reset_for_retry.push(item.id);
+                }
+            }
+
+            Ok(report)
         })
         .await
     }
@@ -765,6 +926,96 @@ impl VoiceQueue {
     }
 }
 
+async fn is_stale_processing_item(item: &QueueItem, now: DateTime<Utc>) -> bool {
+    let started_too_old = item
+        .started_at
+        .map(|started| {
+            now.signed_duration_since(started).num_seconds() > STALE_PROCESSING_BACKSTOP_SECS
+        })
+        .unwrap_or(false);
+
+    if started_too_old {
+        return true;
+    }
+
+    let Some(pid) = item.pid else {
+        return started_too_old;
+    };
+
+    if process_is_esrch(pid) {
+        return true;
+    }
+
+    if let Some(recorded_epoch) = item.proc_start_epoch {
+        if let Some(elapsed) = process_elapsed(pid).await {
+            let process_start_epoch = now.timestamp() - elapsed.as_secs() as i64;
+            if process_start_epoch > recorded_epoch + PID_REUSE_GRACE_SECS {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn process_is_esrch(pid: u32) -> bool {
+    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if rc == 0 {
+        return false;
+    }
+
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
+
+async fn process_elapsed(pid: u32) -> Option<Duration> {
+    let output = tokio::process::Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "etime="])
+        .output()
+        .await
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_ps_etime(stdout.trim())
+}
+
+/// Parse `ps -o etime=` output: `[[dd-]hh:]mm:ss`, plus macOS's short `ss`.
+pub fn parse_ps_etime(input: &str) -> Option<Duration> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let (days, time_part) = if let Some((days, rest)) = trimmed.split_once('-') {
+        (days.parse::<u64>().ok()?, rest)
+    } else {
+        (0, trimmed)
+    };
+
+    let parts: Vec<&str> = time_part.split(':').collect();
+    let (hours, minutes, seconds) = match parts.as_slice() {
+        [seconds] => (0, 0, seconds.parse::<u64>().ok()?),
+        [minutes, seconds] => (
+            0,
+            minutes.parse::<u64>().ok()?,
+            seconds.parse::<u64>().ok()?,
+        ),
+        [hours, minutes, seconds] => (
+            hours.parse::<u64>().ok()?,
+            minutes.parse::<u64>().ok()?,
+            seconds.parse::<u64>().ok()?,
+        ),
+        _ => return None,
+    };
+
+    Some(Duration::from_secs(
+        days * 24 * 60 * 60 + hours * 60 * 60 + minutes * 60 + seconds,
+    ))
+}
+
 /// Result of enqueueing an item
 #[derive(Debug, Clone)]
 pub enum EnqueueResult {
@@ -782,6 +1033,9 @@ pub enum EnqueueResult {
 
     /// Already skipped by a human
     AlreadySkipped(String),
+
+    /// Failed item has reached the automatic retry cap
+    Quarantined(String),
 }
 
 impl EnqueueResult {
@@ -792,7 +1046,8 @@ impl EnqueueResult {
             | Self::AlreadyQueued(id)
             | Self::AlreadyProcessed(id)
             | Self::ResetForRetry(id)
-            | Self::AlreadySkipped(id) => id,
+            | Self::AlreadySkipped(id)
+            | Self::Quarantined(id) => id,
         }
     }
 
@@ -942,6 +1197,7 @@ mod tests {
             file_size,
             detected_at: Utc::now(),
             duration_seconds: None,
+            recorded_at: None,
         }
     }
 
@@ -992,6 +1248,31 @@ mod tests {
             .await
             .unwrap();
         (id, audio_path)
+    }
+
+    async fn seed_processing_event(
+        queue: &VoiceQueue,
+        id: &str,
+        audio_path: &Path,
+        pid: Option<u32>,
+        proc_start_epoch: i64,
+    ) {
+        seed_enqueued(queue, id, audio_path, 12).await;
+        queue
+            .append_event(&queue_event(id, QueueEventType::Approved, None))
+            .await
+            .unwrap();
+        queue
+            .append_event(&queue_event(
+                id,
+                QueueEventType::ProcessingStarted,
+                Some(serde_json::json!({
+                    "pid": pid,
+                    "proc_start_epoch": proc_start_epoch
+                })),
+            ))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -1061,16 +1342,11 @@ mod tests {
     async fn test_retry_failed_item() {
         let (queue, temp) = create_test_queue().await;
 
-        let audio_path = create_audio_file(&temp, "test.m4a", b"fake audio content").await;
-        let result = queue.enqueue(&audio_path, 18, Utc::now()).await.unwrap();
-        let id = result.id().to_string();
-
-        // Mark as failed without approval; E4 routes retry back to the gate.
-        queue.mark_failed(&id, "test error").await.unwrap();
+        let (id, audio_path) = seed_failed_without_approval(&queue, &temp).await;
 
         let item = queue.get(&id).await.unwrap().unwrap();
         assert_eq!(item.status, VoiceQueueStatus::Failed);
-        assert_eq!(item.error, Some("test error".to_string()));
+        assert_eq!(item.error, Some("seeded failure".to_string()));
 
         // Re-enqueue should reset for retry
         let result2 = queue.enqueue(&audio_path, 18, Utc::now()).await.unwrap();
@@ -1079,6 +1355,7 @@ mod tests {
         let item = queue.get(&id).await.unwrap().unwrap();
         assert_eq!(item.status, VoiceQueueStatus::AwaitingApproval);
         assert_eq!(item.retry_count, 1);
+        assert_eq!(item.auto_reset_count, 1);
     }
 
     #[tokio::test]
@@ -1339,7 +1616,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_torn_interior_line_still_aborts_replay() {
+    async fn test_torn_interior_line_skipped_and_counted() {
         let (queue, temp) = create_test_queue().await;
         let audio1 = create_audio_file(&temp, "valid1.m4a", b"valid1").await;
         let audio2 = create_audio_file(&temp, "valid2.m4a", b"valid2").await;
@@ -1360,7 +1637,12 @@ mod tests {
         );
         tokio::fs::write(&queue.queue_path, contents).await.unwrap();
 
-        assert!(queue.replay().await.is_err());
+        let (items, stats) = queue.replay_with_stats().await.unwrap();
+
+        assert_eq!(items.len(), 2);
+        assert!(items.contains_key("valid111111"));
+        assert!(items.contains_key("valid222222"));
+        assert_eq!(stats.skipped_lines, 1);
     }
 
     #[tokio::test]
@@ -1391,6 +1673,249 @@ mod tests {
 
         assert_eq!(enqueued_count, 1);
         assert_eq!(status.awaiting, 1);
+    }
+
+    #[test]
+    fn test_parse_ps_etime() {
+        assert_eq!(parse_ps_etime("03:07").unwrap().as_secs(), 187);
+        assert_eq!(parse_ps_etime("1-02:03:04").unwrap().as_secs(), 93_784);
+        assert_eq!(parse_ps_etime("59").unwrap().as_secs(), 59);
+        assert!(parse_ps_etime("").is_none());
+        assert!(parse_ps_etime("bad").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_auto_vs_human_trigger_counting() {
+        let (queue, temp) = create_test_queue().await;
+        let audio_path = create_audio_file(&temp, "trigger.m4a", b"trigger").await;
+        let id = "trigger12345";
+        seed_enqueued(&queue, id, &audio_path, 7).await;
+
+        queue
+            .append_event(&queue_event(
+                id,
+                QueueEventType::ResetForRetry,
+                Some(serde_json::json!({ "trigger": "human" })),
+            ))
+            .await
+            .unwrap();
+        queue
+            .append_event(&queue_event(id, QueueEventType::ResetForRetry, None))
+            .await
+            .unwrap();
+        queue
+            .append_event(&queue_event(
+                id,
+                QueueEventType::ResetForRetry,
+                Some(serde_json::json!({ "trigger": "auto" })),
+            ))
+            .await
+            .unwrap();
+
+        let item = queue.get(id).await.unwrap().unwrap();
+        assert_eq!(item.retry_count, 3);
+        assert_eq!(item.auto_reset_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_enqueue_quarantined_at_auto_retry_cap() {
+        let (queue, temp) = create_test_queue().await;
+        let (id, audio_path) = seed_failed_without_approval(&queue, &temp).await;
+        queue
+            .append_event(&queue_event(
+                &id,
+                QueueEventType::ResetForRetry,
+                Some(serde_json::json!({ "trigger": "auto" })),
+            ))
+            .await
+            .unwrap();
+        queue
+            .append_event(&queue_event(
+                &id,
+                QueueEventType::Failed,
+                Some(serde_json::json!({ "error": "failed again" })),
+            ))
+            .await
+            .unwrap();
+
+        let result = queue.enqueue(&audio_path, 12, Utc::now()).await.unwrap();
+        let item = queue.get(&id).await.unwrap().unwrap();
+
+        assert!(matches!(result, EnqueueResult::Quarantined(_)));
+        assert_eq!(item.status, VoiceQueueStatus::Failed);
+        assert_eq!(item.auto_reset_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_mark_failed_guard_rejects_terminal_states() {
+        let (queue, temp) = create_test_queue().await;
+        let audio_path = create_audio_file(&temp, "done.m4a", b"done").await;
+        let result = queue.enqueue(&audio_path, 4, Utc::now()).await.unwrap();
+        let id = result.id().to_string();
+        queue
+            .approve(&id, ApprovalDecision::default())
+            .await
+            .unwrap();
+        queue.mark_processing(&id).await.unwrap();
+        queue.mark_done(&id).await.unwrap();
+
+        let error = queue.mark_failed(&id, "late failure").await.unwrap_err();
+
+        assert!(matches!(
+            error,
+            VoiceQueueError::InvalidTransition {
+                from: VoiceQueueStatus::Done,
+                to: VoiceQueueStatus::Failed,
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_attempt_count_derives_from_processing_started_events() {
+        let (queue, temp) = create_test_queue().await;
+        let audio_path = create_audio_file(&temp, "attempts.m4a", b"attempts").await;
+        let id = "attempt12345";
+        seed_enqueued(&queue, id, &audio_path, 8).await;
+        queue
+            .append_event(&queue_event(id, QueueEventType::Approved, None))
+            .await
+            .unwrap();
+        queue
+            .append_event(&queue_event(
+                id,
+                QueueEventType::ProcessingStarted,
+                Some(serde_json::json!({
+                    "pid": std::process::id(),
+                    "proc_start_epoch": Utc::now().timestamp()
+                })),
+            ))
+            .await
+            .unwrap();
+        queue
+            .append_event(&queue_event(
+                id,
+                QueueEventType::ResetForRetry,
+                Some(serde_json::json!({ "trigger": "auto" })),
+            ))
+            .await
+            .unwrap();
+        queue
+            .append_event(&queue_event(
+                id,
+                QueueEventType::ProcessingStarted,
+                Some(serde_json::json!({
+                    "pid": std::process::id(),
+                    "proc_start_epoch": Utc::now().timestamp()
+                })),
+            ))
+            .await
+            .unwrap();
+
+        let item = queue.get(id).await.unwrap().unwrap();
+        assert_eq!(item.status, VoiceQueueStatus::Processing);
+        assert_eq!(item.attempt_count, 2);
+        assert_eq!(item.auto_reset_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_reaper_dead_pid_resets_for_retry() {
+        let (queue, temp) = create_test_queue().await;
+        let audio_path = create_audio_file(&temp, "dead-pid.m4a", b"dead").await;
+        let id = "deadpid12345";
+        seed_processing_event(
+            &queue,
+            id,
+            &audio_path,
+            Some(999_999),
+            Utc::now().timestamp(),
+        )
+        .await;
+
+        let report = queue.reap_stale_processing().await.unwrap();
+        let item = queue.get(id).await.unwrap().unwrap();
+
+        assert_eq!(report.reset_for_retry, vec![id.to_string()]);
+        assert_eq!(item.status, VoiceQueueStatus::Pending);
+        assert_eq!(item.auto_reset_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_reaper_alive_pid_untouched() {
+        let (queue, temp) = create_test_queue().await;
+        let audio_path = create_audio_file(&temp, "alive-pid.m4a", b"alive").await;
+        let id = "alivepid123";
+        seed_processing_event(
+            &queue,
+            id,
+            &audio_path,
+            Some(std::process::id()),
+            Utc::now().timestamp(),
+        )
+        .await;
+
+        let report = queue.reap_stale_processing().await.unwrap();
+        let item = queue.get(id).await.unwrap().unwrap();
+
+        assert!(report.reset_for_retry.is_empty());
+        assert!(report.quarantined.is_empty());
+        assert_eq!(item.status, VoiceQueueStatus::Processing);
+    }
+
+    #[tokio::test]
+    async fn test_reaper_pid_reuse_epoch_mismatch_resets() {
+        let (queue, temp) = create_test_queue().await;
+        let audio_path = create_audio_file(&temp, "reuse-pid.m4a", b"reuse").await;
+        let id = "reusepid123";
+        seed_processing_event(&queue, id, &audio_path, Some(std::process::id()), 0).await;
+
+        let report = queue.reap_stale_processing().await.unwrap();
+        let item = queue.get(id).await.unwrap().unwrap();
+
+        assert_eq!(report.reset_for_retry, vec![id.to_string()]);
+        assert_eq!(item.status, VoiceQueueStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn test_reaper_at_cap_fails_and_quarantines() {
+        let (queue, temp) = create_test_queue().await;
+        let audio_path = create_audio_file(&temp, "cap-pid.m4a", b"cap").await;
+        let id = "cappid123456";
+        seed_processing_event(
+            &queue,
+            id,
+            &audio_path,
+            Some(999_999),
+            Utc::now().timestamp(),
+        )
+        .await;
+        queue
+            .append_event(&queue_event(
+                id,
+                QueueEventType::ResetForRetry,
+                Some(serde_json::json!({ "trigger": "auto" })),
+            ))
+            .await
+            .unwrap();
+        queue
+            .append_event(&queue_event(
+                id,
+                QueueEventType::ProcessingStarted,
+                Some(serde_json::json!({
+                    "pid": 999999u32,
+                    "proc_start_epoch": Utc::now().timestamp()
+                })),
+            ))
+            .await
+            .unwrap();
+
+        let report = queue.reap_stale_processing().await.unwrap();
+        let item = queue.get(id).await.unwrap().unwrap();
+
+        assert!(report.reset_for_retry.is_empty());
+        assert_eq!(report.quarantined.len(), 1);
+        assert_eq!(report.quarantined[0].id, id);
+        assert_eq!(item.status, VoiceQueueStatus::Failed);
+        assert_eq!(item.error.as_deref(), Some("reaped at retry cap"));
     }
 
     #[test]

@@ -225,6 +225,7 @@ impl VoiceMemoWatcher {
                     EnqueueResult::AlreadyProcessed(_) => result.already_processed += 1,
                     EnqueueResult::ResetForRetry(_) => result.reset_for_retry += 1,
                     EnqueueResult::AlreadySkipped(_) => result.already_skipped += 1,
+                    EnqueueResult::Quarantined(_) => result.quarantined += 1,
                 },
                 Err(e) => {
                     tracing::warn!("Failed to enqueue {}: {}", path.display(), e);
@@ -310,6 +311,7 @@ pub struct ScanResult {
     pub already_processed: usize,
     pub already_skipped: usize,
     pub reset_for_retry: usize,
+    pub quarantined: usize,
     pub deferred: usize,
     pub errors: usize,
     pub new_ids: Vec<String>,
@@ -322,6 +324,7 @@ impl ScanResult {
             + self.already_processed
             + self.already_skipped
             + self.reset_for_retry
+            + self.quarantined
     }
 }
 

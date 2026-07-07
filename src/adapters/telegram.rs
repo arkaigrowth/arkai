@@ -4,6 +4,7 @@
 //! can receive and transcribe them.
 
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use reqwest::multipart::{Form, Part};
@@ -43,10 +44,16 @@ pub struct TelegramConfig {
 impl TelegramClient {
     /// Create a new Telegram client
     pub fn new(bot_token: String, chat_id: String) -> Self {
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(2))
+            .timeout(Duration::from_secs(8))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
         Self {
             bot_token,
             chat_id,
-            client: reqwest::Client::new(),
+            client,
         }
     }
 
