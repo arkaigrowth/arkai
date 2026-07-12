@@ -434,11 +434,7 @@ pub async fn execute_ground(content_dir: &PathBuf) -> Result<()> {
                 };
                 println!(
                     "  - \"{}\"{}",
-                    if ev.quote.len() > 60 {
-                        format!("{}...", &ev.quote[..57])
-                    } else {
-                        ev.quote.clone()
-                    },
+                    crate::cli::triage::truncate_chars(&ev.quote, 60),
                     hint
                 );
             }

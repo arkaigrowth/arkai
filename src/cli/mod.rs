@@ -987,11 +987,7 @@ async fn list_library(content_type: Option<IngestType>, limit: usize) -> Result<
     println!("{}", "-".repeat(80));
 
     for item in items.iter().take(limit) {
-        let title_truncated = if item.title.len() > 47 {
-            format!("{}...", &item.title[..47])
-        } else {
-            item.title.clone()
-        };
+        let title_truncated = triage::truncate_chars(&item.title, 50);
         println!(
             "{:<18} {:<10} {:<50}",
             item.id.as_str(),
@@ -1026,11 +1022,7 @@ async fn search_library(query: &str, semantic: bool, limit: usize) -> Result<()>
     println!("{}", "-".repeat(80));
 
     for item in &results {
-        let title_truncated = if item.title.len() > 47 {
-            format!("{}...", &item.title[..47])
-        } else {
-            item.title.clone()
-        };
+        let title_truncated = triage::truncate_chars(&item.title, 50);
         println!(
             "{:<18} {:<10} {:<50}",
             item.id.as_str(),
@@ -1108,11 +1100,7 @@ async fn search_semantic(query: &str, limit: usize) -> Result<()> {
             .vector_score
             .map(|v| format!("{:.3}", v))
             .unwrap_or_else(|| "-".into());
-        let title = if r.title.len() > 48 {
-            format!("{}...", &r.title[..48])
-        } else {
-            r.title.clone()
-        };
+        let title = triage::truncate_chars(&r.title, 51);
         println!(
             "{:<18} {:<7.4} {:<7} {:<7} {}",
             r.item_id, r.combined_score, fts, vec, title
@@ -1120,11 +1108,7 @@ async fn search_semantic(query: &str, limit: usize) -> Result<()> {
 
         // Show chunk snippet if available
         if let Some(ref chunk_text) = r.chunk_text {
-            let snippet = if chunk_text.len() > 150 {
-                format!("{}...", &chunk_text[..150])
-            } else {
-                chunk_text.clone()
-            };
+            let snippet = triage::truncate_chars(chunk_text, 153);
             println!("  >> {}", snippet.replace('\n', " "));
         }
     }
