@@ -391,7 +391,6 @@ content_id = SHA256(canonical_url)[0:16]
 | [ARKAI_GMAIL_DESIGN.md](./ARKAI_GMAIL_DESIGN.md) | Email triage design |
 | [ROADMAP.md](./ROADMAP.md) | Development roadmap |
 | [AI_OS_ARCHITECTURE.md](./AI_OS_ARCHITECTURE.md) | High-level conceptual architecture |
-| [scout_outputs/ARCHITECTURE_CLARITY.md](../scout_outputs/ARCHITECTURE_CLARITY.md) | Q&A about system boundaries |
 
 ---
 
