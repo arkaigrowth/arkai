@@ -47,4 +47,6 @@ vault-sandbox/
 
 # Python
 __pycache__/
+*.pyc
 .venv/
+.pytest_cache/
