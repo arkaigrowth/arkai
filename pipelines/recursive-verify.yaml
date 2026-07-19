@@ -9,7 +9,7 @@
 #   5. Detects discrepancies between claims and evidence
 #   6. Generates annotated metacontent
 #
-# This is the "assembled weapon" — the full fact-checking pipeline.
+# This is the "assembled weapon", the full fact-checking pipeline.
 
 name: recursive-verify
 description: >
@@ -51,7 +51,7 @@ steps:
       initial_delay_ms: 2000
 
   # Step 3: Extract entities (parallel with claims in future)
-  # People, orgs, concepts mentioned — used for cross-referencing
+  # People, orgs, concepts mentioned, used for cross-referencing
   - name: extract-entities
     adapter: fabric
     action: extract_entities
@@ -136,7 +136,7 @@ steps:
 #
 # Phase 5: Dual-model extraction (Marcus pattern)
 #   Run extract-claims through TWO models (Claude + GPT-4)
-#   Reconcile disagreements — models disagree on ~15-20% of claims
+#   Reconcile disagreements, models disagree on ~15-20% of claims
 #   Higher precision for high-stakes content
 #
 # Phase 6: Feedback loop (AFEV pattern)

@@ -669,7 +669,7 @@ async fn ingest_youtube(url: &str, tags: Option<String>, title: Option<String>) 
         .filter(|s| !s.is_empty())
         .collect();
 
-    // 6. Write metadata.json ONCE (do NOT call content.save_metadata() — it overwrites)
+    // 6. Write metadata.json ONCE (do NOT call content.save_metadata(), it overwrites)
     let yt_dlp_version = run_cmd(yt_dlp, &["--version"]).unwrap_or_default();
     let metadata = serde_json::json!({
         "id": video_id,

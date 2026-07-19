@@ -8,8 +8,8 @@ Quick-reference pitches for sharing the personal AI infrastructure stack.
 
 | Layer | What | Why |
 |-------|------|-----|
-| **Fabric** | 240+ AI prompts | The *muscle* — knows what to do |
-| **arkai** | Rust orchestration | The *spine* — never forgets, never fails |
+| **Fabric** | 240+ AI prompts | The *muscle*, knows what to do |
+| **arkai** | Rust orchestration | The *spine*, never forgets, never fails |
 | **Together** | Personal AI infrastructure | *Second brain* that actually works |
 
 **Core metaphor**: "Your AI needs a spine"
@@ -22,7 +22,7 @@ Quick-reference pitches for sharing the personal AI infrastructure stack.
 >
 > Hey [Name],
 >
-> I built something that might interest you — a personal AI infrastructure stack:
+> I built something that might interest you, a personal AI infrastructure stack:
 >
 > **Fabric** = 240+ crowdsourced AI prompts (extract insights from any video in 30 seconds)
 > **arkai** = Rust spine that never loses your work (event-sourced, resumable, searchable)
@@ -79,7 +79,7 @@ Quick-reference pitches for sharing the personal AI infrastructure stack.
 > "Fabric handles AI transformation. arkai handles reliability. Together: personal AI infrastructure that never loses your work."
 
 **Casual:**
-> "I built a system that turns any YouTube video into searchable knowledge in 30 seconds — and never forgets it."
+> "I built a system that turns any YouTube video into searchable knowledge in 30 seconds, and never forgets it."
 
 **Provocative:**
 > "Your AI results vanish after every chat. Mine don't. Here's why."
@@ -105,7 +105,7 @@ Quick-reference pitches for sharing the personal AI infrastructure stack.
 Why this works:
 1. Everyone has videos they "should watch but don't have time for"
 2. Works immediately with any URL they care about
-3. Output is genuinely useful (not just summary — actionable insights)
+3. Output is genuinely useful (not just summary, actionable insights)
 4. Takes 30 seconds, instantly understood
 
 ```bash

@@ -300,7 +300,7 @@ pub fn multi_level_search(
     // Merge: start with item results, preserve their hybrid scores
     let mut merged: HashMap<String, HybridSearchResult> = HashMap::new();
 
-    // Add item-level results — keep original combined_score from hybrid_search
+    // Add item-level results, keep original combined_score from hybrid_search
     for r in item_results.iter() {
         merged.insert(
             r.item_id.clone(),
@@ -705,7 +705,7 @@ mod tests {
         insert_item(&conn, "item1", "Rust Guide", "rust");
         insert_embedding(&conn, "item1", &[1.0, 0.0, 0.0]);
 
-        // No chunks at all — should fall back to item-level
+        // No chunks at all, should fall back to item-level
         let query_vec = [0.9_f32, 0.1, 0.0];
         let results = multi_level_search(&conn, &query_vec, "rust", 10).unwrap();
 
@@ -790,7 +790,7 @@ mod tests {
         // should not get buried by chunk-only distractors.
         let conn = setup_db_with_chunks();
 
-        // Relevant item — title clearly matches query
+        // Relevant item, title clearly matches query
         insert_item(&conn, "relevant", "85 Percent Unemployable AI Job Loss", "ai automation");
         insert_embedding(&conn, "relevant", &[0.8, 0.2, 0.0]);
 
@@ -871,7 +871,7 @@ mod tests {
     fn test_fts_query_with_date_text() {
         let conn = setup_db();
         insert_item(&conn, "d1", "Meeting notes 2026-03-15", "");
-        // Must not error — date-like text previously caused "no such column: 03"
+        // Must not error, date-like text previously caused "no such column: 03"
         let results = fts_search(&conn, "2026-03-15", 10);
         assert!(results.is_ok());
     }

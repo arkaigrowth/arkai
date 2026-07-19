@@ -40,8 +40,8 @@ Research (LiveFC, ClaimBuster, CT-CWC-18) shows that pre-filtering for check-wor
 3. For each checkworthy statement, assign a worthiness score (0.0 to 1.0):
    - **0.9-1.0**: Specific, verifiable, consequential (numbers, dates, named events)
    - **0.7-0.8**: Verifiable but less specific (general factual claims)
-   - **0.5-0.6**: Borderline — could be checked but may not yield clear true/false
-   - Below 0.5: Should have been filtered out — do not include
+   - **0.5-0.6**: Borderline, could be checked but may not yield clear true/false
+   - Below 0.5: Should have been filtered out, do not include
 
 4. For each checkworthy statement, classify the claim type:
    - `numerical`: Contains specific numbers, percentages, dates
@@ -76,7 +76,7 @@ You output ONLY a valid JSON object with the following structure:
 
 # STATEMENT EXTRACTION RULES
 
-1. **PRESERVE ORIGINAL TEXT**: The `statement` field should be the verbatim text from the transcript (or as close as possible while maintaining a complete thought). This is NOT yet a claim — downstream extraction will formalize it.
+1. **PRESERVE ORIGINAL TEXT**: The `statement` field should be the verbatim text from the transcript (or as close as possible while maintaining a complete thought). This is NOT yet a claim, downstream extraction will formalize it.
 
 2. **COMPLETE THOUGHTS**: Include enough context for the statement to be understandable on its own, but don't combine multiple unrelated claims into one statement.
 

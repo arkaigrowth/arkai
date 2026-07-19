@@ -20,9 +20,9 @@ Usage:
     python3 contracts/validate_queue_task.py --check-lease contracts/fixtures/queue_task_state_expired_lease.json
 
 Exit codes:
-    0 — All files valid
-    1 — One or more files failed validation
-    2 — Usage error
+    0: All files valid
+    1: One or more files failed validation
+    2: Usage error
 """
 
 import hashlib
@@ -128,7 +128,7 @@ def validate_request(data: dict, filepath: str) -> list[str]:
     except (ValueError, TypeError):
         errors.append(f"created_at must be RFC3339, got '{data['created_at']}'")
 
-    # integrity_hash (optional, v1.1.0) — integrity check, not authentication
+    # integrity_hash (optional, v1.1.0): integrity check, not authentication
     ih = data.get("integrity_hash")
     if ih is not None:
         if not isinstance(ih, str) or not INTEGRITY_HASH_PATTERN.match(ih):

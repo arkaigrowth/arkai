@@ -28,8 +28,8 @@ File-based task queue with lease semantics, using the two-directory model.
 
 ### Why two directories (not single)
 
-- `workspace/output/queue/` — agent creates requests (write direction: agent → host)
-- `workspace/input/queue/` — host creates state+results (write direction: host → agent)
+- `workspace/output/queue/`: agent creates requests (write direction: agent to host)
+- `workspace/input/queue/`: host creates state+results (write direction: host to agent)
 - Respects Docker mount semantics and ownership boundaries
 - Request files are immutable; state files are mutable
 - Clear audit trail: request = "what was asked", state = "what happened"
@@ -37,7 +37,7 @@ File-based task queue with lease semantics, using the two-directory model.
 ### Why lease-based (not lock-based)
 
 - Leases auto-expire, preventing orphaned locks from crashed workers
-- `lease_until` timestamp is self-healing — no manual intervention needed
+- `lease_until` timestamp is self-healing, no manual intervention needed
 - v1 assumes single worker, but lease protocol allows future multi-worker extension
 
 ## Lifecycle State Machine
@@ -62,27 +62,27 @@ pending ──→ leased ──→ done     (success)
 ## Threat Model
 
 ### 1. Race condition (two workers lease same task)
-- **Risk:** Low — v1 is single-worker by design
+- **Risk:** Low, v1 is single-worker by design
 - **Mitigation:** lease_owner field enables detection; atomic rename prevents partial reads
 - **Future:** If multi-worker needed, add flock() or compare-and-swap on lease_owner
 
 ### 2. Stale lease (worker crashes mid-execution)
-- **Risk:** Medium — worker process could be killed
+- **Risk:** Medium, worker process could be killed
 - **Mitigation:** lease_until auto-expires; next scan picks up the task
 - **Residual risk:** Partially-completed actions (e.g., Note created but state not updated). Mitigated by idempotency_key on create operations.
 
 ### 3. Malicious task injection
-- **Risk:** Low — producer is the OpenClaw agent, not external input
+- **Risk:** Low, producer is the OpenClaw agent, not external input
 - **Mitigation:** Worker validates schema before execution; operations are allowlisted; params are validated per-service; Apple CLI bridge sanitizes inputs
 - **Defense in depth:** Agent can only create files via safe_fs_write_text (no arbitrary path writes)
 
 ### 4. Queue flooding
-- **Risk:** Low — agent operates under human supervision
+- **Risk:** Low, agent operates under human supervision
 - **Mitigation:** Max queue depth (configurable, default 100 pending); worker rejects beyond limit
-- **Note:** Not implemented in v1 contract — worker-side concern
+- **Note:** Not implemented in v1 contract, worker-side concern
 
 ### 5. Result tampering
-- **Risk:** Negligible — host is trusted
+- **Risk:** Negligible, host is trusted
 - **Mitigation:** Agent should still validate result schema before processing
 
 ## Versioning Strategy
@@ -98,14 +98,14 @@ pending ──→ leased ──→ done     (success)
 - **task_id:** If `idempotency_key` is set, `task_id = SHA256(key)[:12]`. Ensures same logical request always gets the same ID.
 - **Duplicate detection:** Worker checks for existing state file before processing. If state file exists and is terminal (done/dead), skip.
 - **Create operations:** MUST include idempotency_key to prevent duplicate Notes/Reminders. Worker checks key before executing.
-- **Read/list/search:** Naturally idempotent — safe to re-execute.
+- **Read/list/search:** Naturally idempotent, safe to re-execute.
 
 ## Retention Guidance
 
 - **Settled tasks** (done/dead): Auto-delete both request + state files after `QUEUE_RETAIN_DAYS` (default 7)
 - **Based on:** `completed_at` or `dead_at` timestamp, not file mtime
 - **Active tasks** (pending/leased): Never cleaned up
-- **Pattern match:** Only touches `{12-hex}.json` files — won't delete other files in the directory
+- **Pattern match:** Only touches `{12-hex}.json` files, won't delete other files in the directory
 - **Disable:** Set `QUEUE_RETAIN_DAYS=-1`
 
 ## Validation

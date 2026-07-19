@@ -120,7 +120,7 @@ fn is_abbreviation(text: &str, period_pos: usize) -> bool {
         }
     }
 
-    // Check for patterns like "U.S." — single letter followed by period
+    // Check for patterns like "U.S.", single letter followed by period
     // that is part of a multi-dot abbreviation
     if candidate.len() >= 2 {
         let chars: Vec<char> = candidate.chars().collect();

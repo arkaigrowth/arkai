@@ -106,7 +106,7 @@ async fn download_audio(url: &str, yt_dlp_path: &str, output_dir: &Path) -> Resu
     let audio_file = output_dir.join("audio.mp3");
     anyhow::ensure!(
         audio_file.exists(),
-        "Audio download failed — audio.mp3 not found in temp dir"
+        "Audio download failed, audio.mp3 not found in temp dir"
     );
 
     Ok(audio_file)
