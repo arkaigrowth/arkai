@@ -934,7 +934,7 @@ def get_gmail_service():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(str(creds_path), SCOPES)
+            flow = InstalledAppFlow.from_client_config(load_oauth_config(creds_path), SCOPES)
             creds = flow.run_local_server(port=0)
 
         token_path.parent.mkdir(parents=True, exist_ok=True)
