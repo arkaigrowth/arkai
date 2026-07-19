@@ -121,14 +121,14 @@ response = client.chat.completions.create(
       "command": "uv",
       "args": [
         "--directory",
-        "/Users/alexkamysz/AI/rlm-fork",
+        "~/AI/rlm-fork",
         "run",
         "python",
         "-m",
         "src.rlm_mcp_server"
       ],
       "env": {
-        "RLM_DATA_DIR": "/Users/alexkamysz/.rlm-data",
+        "RLM_DATA_DIR": "~/.rlm-data",
         "OLLAMA_URL": "http://localhost:11434",
         "OPENROUTER_API_KEY": "${OPENROUTER_API_KEY}"
       }

@@ -934,7 +934,7 @@ def get_gmail_service():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(str(creds_path), SCOPES)
+            flow = InstalledAppFlow.from_client_config(load_oauth_config(creds_path), SCOPES)
             creds = flow.run_local_server(port=0)
 
         token_path.parent.mkdir(parents=True, exist_ok=True)
@@ -993,8 +993,8 @@ The `arkai-gmail` repo should have its own `.ralph/` but can reference arkai's c
 - Docstrings with security notes where relevant
 
 ### Reference
-- See: /Users/alexkamysz/AI/arkai/.ralph/memory/constraints.md
-- See: /Users/alexkamysz/AI/arkai/docs/ARKAI_GMAIL_DESIGN.md
+- See: ~/AI/arkai/.ralph/memory/constraints.md
+- See: ~/AI/arkai/docs/ARKAI_GMAIL_DESIGN.md
 ```
 
 ### Bootstrap Template
@@ -1013,7 +1013,7 @@ The `arkai-gmail` repo should have its own `.ralph/` but can reference arkai's c
 You have zero memory of past sessions. Before acting:
 
 1. **Read constraints**: `/path/to/arkai-gmail/.ralph/memory/constraints.md`
-2. **Read design doc**: `/Users/alexkamysz/AI/arkai/docs/ARKAI_GMAIL_DESIGN.md`
+2. **Read design doc**: `~/AI/arkai/docs/ARKAI_GMAIL_DESIGN.md`
 3. **Check decisions**: `/path/to/arkai-gmail/.ralph/memory/decisions.log`
 
 ## Retrieval Protocol

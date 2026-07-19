@@ -270,11 +270,11 @@
 ## Obsidian Vault Integration
 
 > **Vault location**: `~/AI/arkai/vault-sandbox/`
-> **Session handoff**: `.ralph/memory/handoffs/2026-01-20-obsidian-session5.md`
+> **Status**: design exploration
 
 ### High Priority
 - [ ] **Email Triage Storage** - Where to store triaged emails in vault
-  - Options: `00-Inbox/Email/`, `CATSY/Email/`, dedicated `EMAIL/` folder
+  - Options: `00-Inbox/Email/`, `Work/Email/`, dedicated `EMAIL/` folder
   - Consider: searchability, auto-organization, Graph View connections
 
 - [ ] **Install Periodic Notes Calendar** (luiisca)

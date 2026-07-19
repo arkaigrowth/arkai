@@ -1,22 +1,8 @@
-<!--
-README BEAUTIFIER CHANGES:
-- Added compelling tagline and hero section
-- Added "Why arkai?" section with pain/solution framing
-- Added ASCII architecture diagram
-- Added comparison table vs alternatives
-- Improved installation with prerequisites inline
-- Added quickstart "60-second" section
-- Added Mermaid diagrams (collapsible)
-- Reorganized for scan-ability
-- Added badges
-- Kept all original functionality docs
--->
-
 <div align="center">
 
 # arkai
 
-**The production backbone for AI pipelines.**
+**An orchestration backbone for AI pipelines.**
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org/)
@@ -40,7 +26,7 @@ Building AI workflows today means:
 
 ## The Solution
 
-arkai gives your AI a **spine** — a Rust-based orchestration layer that:
+arkai gives your AI a **spine**, a Rust-based orchestration layer that:
 - **Remembers** everything (event-sourced state)
 - **Recovers** from failures (idempotent resume)
 - **Replays** any operation (full audit trail)
@@ -205,7 +191,7 @@ arkai ingest "https://example.com/article" --tags "tech"
 ### Massive Context Analysis (RLM)
 ```bash
 # Analyze entire repositories that exceed context windows
-# Uses Recursive Language Model (MIT paper: arxiv.org/html/2512.24601v1)
+# Uses a Recursive Language Model approach for context that exceeds the window
 
 # In Claude Code, RLM tools are available as MCP:
 rlm_load_context      # Load files as external variables
@@ -299,23 +285,33 @@ steps:
 
 ## 📚 Documentation
 
-- [AI OS Architecture](docs/AI_OS_ARCHITECTURE.md) — Full philosophy and design
-- [Pitch](docs/PITCH.md) — Quick shareable summary
-- [Architecture Overview](ai_docs/architecture/overview.md) — Technical deep-dive
+- [AI OS Architecture](docs/AI_OS_ARCHITECTURE.md): Full philosophy and design
+- [Pitch](docs/PITCH.md): Quick shareable summary
+- [Architecture Overview](ai_docs/architecture/overview.md): Technical deep-dive
 
 ---
 
 ## 🛠️ Prerequisites
 
-- **Rust 1.70+** — [Install](https://rustup.rs/)
-- **Fabric** — [Install](https://github.com/danielmiessler/fabric#installation)
-- **LLM API key** — Configure via `fabric --setup`
+- **Rust 1.70+**: [Install](https://rustup.rs/)
+- **Fabric**: [Install](https://github.com/danielmiessler/fabric#installation)
+- **LLM API key**: Configure via `fabric --setup`
+
+---
+
+## ⚠️ Status and Limitations
+
+- Early-stage and under active development. Commands and interfaces may change.
+- Developed on macOS. Linux and Windows are not tested, and voice capture relies on macOS-specific paths.
+- Requires an external [Fabric](https://github.com/danielmiessler/fabric) install and your own LLM API key.
+- The RLM (large-context) integration depends on a separate RLM server and is optional.
+- Some items in the docs and roadmap describe planned or in-progress work rather than shipped features.
 
 ---
 
 ## 📜 License
 
-MIT — Use it, fork it, build on it.
+MIT. Use it, fork it, build on it.
 
 ---
 

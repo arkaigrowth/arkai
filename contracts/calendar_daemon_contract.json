@@ -6,7 +6,7 @@
   "version": "1.0.0",
   "owner_repo": "arkai",
   "semver": "1.0.0",
-  "adr_pointer": "/Users/alexkamysz/AI/arkai/docs/ai/decisions/0002-host-daemon-file-drop-contracts.md",
+  "adr_pointer": "docs/ai/decisions/0002-host-daemon-file-drop-contracts.md",
 
   "contract": {
     "entrypoint": {
@@ -28,7 +28,7 @@
         "GCAL_CONFIG_DIR": {
           "description": "Config directory (credentials.json + token.json)",
           "default": "~/.arkai-calendar/",
-          "note": "Separate from ~/.arkai-gmail/ — different OAuth scope"
+          "note": "Separate from ~/.arkai-gmail/, different OAuth scope"
         },
         "GCAL_LOOKAHEAD_DAYS": {
           "description": "How many days ahead to fetch events",
@@ -75,7 +75,7 @@
       "fatal": "Exit code 1 for auth failure or config issues",
       "success": "Exit code 0 even if 0 events were fetched (empty calendar is not an error)",
       "retry_safe": true,
-      "note": "Idempotent — safe to re-run. Events are overwritten, not duplicated."
+      "note": "Idempotent, safe to re-run. Events are overwritten, not duplicated."
     },
 
     "retention": {
@@ -88,7 +88,7 @@
     "scheduling": {
       "recommended_interval": "15-30 minutes",
       "mechanism": "launchd plist (macOS) or cron",
-      "concurrency": "Single instance only. No locking needed — events are overwritten idempotently.",
+      "concurrency": "Single instance only. No locking needed, events are overwritten idempotently.",
       "note": "Each run takes 1-3s (Google API calls only, no LLM). Much faster than email daemon."
     },
 
@@ -96,12 +96,12 @@
       "google_calendar_api": "Must enable Google Calendar API in the same GCP project as Gmail",
       "credentials": "Copy credentials.json from ~/.arkai-gmail/ to ~/.arkai-calendar/ (same OAuth client)",
       "first_auth": "First run will open browser for calendar.readonly consent (separate from Gmail consent)",
-      "python_venv": "Uses ~/AI/arkai-gmail/.venv/bin/python3 — shares venv with email daemon. All deps pre-installed."
+      "python_venv": "Uses ~/AI/arkai-gmail/.venv/bin/python3, shares venv with email daemon. All deps pre-installed."
     },
 
     "oauth_scope": {
       "scopes": ["https://www.googleapis.com/auth/calendar.readonly"],
-      "note": "Read-only from day one. No write operations. Token at ~/.arkai-calendar/token.json — never enters Docker container."
+      "note": "Read-only from day one. No write operations. Token at ~/.arkai-calendar/token.json, never enters Docker container."
     }
   },
 

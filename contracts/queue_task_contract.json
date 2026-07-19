@@ -6,13 +6,13 @@
   "version": "1.1.0",
   "owner_repo": "arkai",
   "semver": "1.1.0",
-  "adr_pointer": "/Users/alexkamysz/AI/arkai/contracts/queue_task_adr.md",
+  "adr_pointer": "contracts/queue_task_adr.md",
 
   "contract": {
     "architecture": {
       "pattern": "File-based task queue with lease semantics",
-      "producer": "OpenClaw agent (Docker container) — writes request files via safe_fs_write_text",
-      "consumer": "Host-side worker process — reads requests, executes via Apple CLI bridge, writes state files",
+      "producer": "OpenClaw agent (Docker container), writes request files via safe_fs_write_text",
+      "consumer": "Host-side worker process, reads requests, executes via Apple CLI bridge, writes state files",
       "transport": "Docker bind-mount shared directories",
       "note": "No database, no message broker. Simplicity over throughput. Designed for <100 tasks/day."
     },
@@ -55,12 +55,12 @@
 
     "retry_classification": {
       "transient": {
-        "description": "Temporary failure — retry will likely succeed",
+        "description": "Temporary failure, retry will likely succeed",
         "codes": ["TIMEOUT", "RATE_LIMITED", "CLI_ERROR", "SERVICE_UNAVAILABLE"],
         "behavior": "Increment attempts, wait visibility_timeout, retry"
       },
       "permanent": {
-        "description": "Will never succeed — do not retry",
+        "description": "Will never succeed, do not retry",
         "codes": ["INVALID_PARAMS", "PERMISSION_DENIED", "NOT_FOUND", "UNSUPPORTED_OPERATION"],
         "behavior": "Immediately transition to dead"
       }
@@ -128,7 +128,7 @@
       "integrity_hash": {
         "type": ["string", "null"],
         "pattern": "^[a-f0-9]{64}$",
-        "description": "Optional (v1.1.0). SHA256 hex digest of canonical action JSON: json.dumps(action, sort_keys=True, separators=(',',':')). Integrity check, not authentication — no shared secret. Worker SHOULD verify if present, MUST NOT require."
+        "description": "Optional (v1.1.0). SHA256 hex digest of canonical action JSON: json.dumps(action, sort_keys=True, separators=(',',':')). Integrity check, not authentication, no shared secret. Worker SHOULD verify if present, MUST NOT require."
       },
       "max_attempts": {
         "type": "integer",

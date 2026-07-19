@@ -6,7 +6,7 @@
   "version": "1.0.0",
   "owner_repo": "arkai",
   "semver": "1.0.0",
-  "adr_pointer": "/Users/alexkamysz/AI/arkai/docs/ai/decisions/0002-host-daemon-file-drop-contracts.md",
+  "adr_pointer": "docs/ai/decisions/0002-host-daemon-file-drop-contracts.md",
 
   "contract": {
     "entrypoint": {
@@ -66,7 +66,7 @@
       "fatal": "Exit code 1 for auth failure, missing API key, or config issues",
       "success": "Exit code 0 even if 0 emails were processed (no new mail is not an error)",
       "retry_safe": true,
-      "note": "Idempotent — safe to re-run. Gmail history ID tracks what was already fetched."
+      "note": "Idempotent, safe to re-run. Gmail history ID tracks what was already fetched."
     },
 
     "retention": {
@@ -79,14 +79,14 @@
     "scheduling": {
       "recommended_interval": "5-15 minutes",
       "mechanism": "launchd plist (macOS) or cron",
-      "concurrency": "Single instance only. No locking needed — Gmail history ID prevents duplicates.",
+      "concurrency": "Single instance only. No locking needed, Gmail history ID prevents duplicates.",
       "note": "Each run takes ~3-8s per email (LLM API call). 10 emails ≈ 30-80s."
     },
 
     "prerequisites": {
       "gmail_auth": "Must run 'arkai-gmail auth' once to complete OAuth flow",
       "anthropic_key": "ANTHROPIC_API_KEY must be set",
-      "python_venv": "Uses ~/AI/arkai-gmail/.venv/bin/python3 — NOT system Python. All deps pre-installed."
+      "python_venv": "Uses ~/AI/arkai-gmail/.venv/bin/python3, NOT system Python. All deps pre-installed."
     },
 
     "oauth_scope_note": {
