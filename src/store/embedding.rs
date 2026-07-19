@@ -1,7 +1,7 @@
 //! Embedding provider for vector similarity operations.
 //!
 //! Provides a trait-based abstraction over embedding models, with a concrete
-//! implementation for the local Ollama API. Designed for extensibility —
+//! implementation for the local Ollama API. Designed for extensibility;
 //! additional providers (OpenAI, etc.) can implement `EmbeddingProvider`.
 
 use anyhow::{anyhow, Context, Result};
@@ -140,12 +140,12 @@ impl EmbeddingProvider for OllamaProvider {
             .map_err(|e| {
                 if e.is_connect() {
                     anyhow!(
-                        "cannot connect to Ollama at {} — is it running? ({})",
+                        "cannot connect to Ollama at {}, is it running? ({})",
                         self.config.base_url,
                         e
                     )
                 } else if e.is_timeout() {
-                    anyhow!("Ollama request timed out — model may be loading")
+                    anyhow!("Ollama request timed out, model may be loading")
                 } else {
                     anyhow!("Ollama HTTP error: {}", e)
                 }
@@ -156,7 +156,7 @@ impl EmbeddingProvider for OllamaProvider {
             let body_text = response.text().await.unwrap_or_default();
             if body_text.contains("not found") || body_text.contains("pull") {
                 return Err(anyhow!(
-                    "model \"{}\" not available in Ollama — run: ollama pull {}",
+                    "model \"{}\" not available in Ollama, run: ollama pull {}",
                     self.config.model,
                     self.config.model
                 ));
@@ -181,7 +181,7 @@ impl EmbeddingProvider for OllamaProvider {
 
         if vec.len() != self.config.dimensions {
             return Err(anyhow!(
-                "dimension mismatch: expected {}, got {} — check embedding.dimensions config",
+                "dimension mismatch: expected {}, got {}, check embedding.dimensions config",
                 self.config.dimensions,
                 vec.len()
             ));

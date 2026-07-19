@@ -14,9 +14,9 @@ Usage:
         contracts/validate_calendar_output.py --pydantic contracts/fixtures/calendar_daemon_sample.json
 
 Exit codes:
-    0 — All files valid
-    1 — One or more files failed validation
-    2 — Usage error (no files, missing contract)
+    0: All files valid
+    1: One or more files failed validation
+    2: Usage error (no files, missing contract)
 """
 
 import json

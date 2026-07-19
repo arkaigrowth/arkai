@@ -88,7 +88,7 @@ struct CatalogEntry {
 // Library metadata.json format (deserialization only)
 // ─────────────────────────────────────────────────────────────────
 
-/// metadata.json — handles both arkai catalog format and Whisper pipeline format.
+/// metadata.json, handles both arkai catalog format and Whisper pipeline format.
 ///
 /// Arkai format:  { id, title, url, content_type, processed_at, tags }
 /// Whisper format: { id, title, url, source, duration, transcription_model, ... }
@@ -316,7 +316,7 @@ fn discover_artifacts(dir: &Path) -> Vec<String> {
             continue;
         };
 
-        // Skip metadata.json itself — it's structural, not an artifact
+        // Skip metadata.json itself, it's structural, not an artifact
         if name == "metadata.json" {
             continue;
         }

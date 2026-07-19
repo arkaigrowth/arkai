@@ -7,10 +7,10 @@
 ## The Problem
 
 Most AI tools are:
-- **Ephemeral** — results vanish after the chat ends
-- **Fragile** — fail mid-way with no recovery
-- **Monolithic** — one tool trying to do everything
-- **Unauditable** — no history of what happened or why
+- **Ephemeral**: results vanish after the chat ends
+- **Fragile**: fail mid-way with no recovery
+- **Monolithic**: one tool trying to do everything
+- **Unauditable**: no history of what happened or why
 
 ---
 
@@ -66,7 +66,7 @@ Most AI tools are:
 | **Patterns** | AI transformation, prompts | Fabric (Go, 200+ patterns) |
 | **LLM** | Raw intelligence | Provider of choice |
 
-*"A really smart AI with a bad system is way worse than a well-designed system with a less smart model."* — Daniel Miessler
+*"A really smart AI with a bad system is way worse than a well-designed system with a less smart model."* (Daniel Miessler)
 
 ### 2. **Event Sourcing = Time Travel**
 
@@ -263,7 +263,7 @@ arkai config                 # Show resolved paths
 | **Fearless concurrency** | Safe parallel execution |
 | **Fast startup** | CLI feels instant |
 
-The spine doesn't need to be "smart" — it needs to be **reliable**. Rust excels here.
+The spine doesn't need to be "smart", it needs to be **reliable**. Rust excels here.
 
 ---
 

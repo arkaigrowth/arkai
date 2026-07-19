@@ -148,7 +148,7 @@ fn render_text(
 }
 
 /// Truncate a string to at most `max_chars` characters, appending "..." if truncated.
-/// Safe for multibyte/emoji content — operates on char boundaries, not byte offsets.
+/// Safe for multibyte/emoji content, operates on char boundaries, not byte offsets.
 fn truncate_chars(s: &str, max_chars: usize) -> String {
     let char_count = s.chars().count();
     if char_count <= max_chars {
@@ -257,7 +257,7 @@ pub(crate) fn parse_snooze_until(until: &str) -> Result<String> {
         return Ok(dt.with_timezone(&Utc).to_rfc3339());
     }
 
-    // Try ISO date — interpret in local timezone, convert to UTC
+    // Try ISO date, interpret in local timezone, convert to UTC
     if let Ok(date) = NaiveDate::parse_from_str(until, "%Y-%m-%d") {
         let local_midnight = date
             .and_hms_opt(0, 0, 0)
@@ -382,7 +382,7 @@ mod tests {
 
     #[test]
     fn test_truncate_chars_unicode_safe() {
-        // Emoji + curly quotes — must not panic
+        // Emoji + curly quotes, must not panic
         let emoji_title = "Call dentist about insurance tomorrow morning please";
         let result = truncate_chars(emoji_title, 20);
         assert!(result.ends_with("..."));

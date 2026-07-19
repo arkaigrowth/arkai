@@ -93,10 +93,10 @@ your-project/
 
 ## Key Principles
 
-1. **Event Sourcing** — Every action logged, state reconstructible
-2. **Fail-Fast** — Timeouts, limits, denylist patterns
-3. **Content-Addressable** — SHA256(url) = deterministic IDs
-4. **Unix Philosophy** — Small tools that compose
+1. **Event Sourcing**: Every action logged, state reconstructible
+2. **Fail-Fast**: Timeouts, limits, denylist patterns
+3. **Content-Addressable**: SHA256(url) = deterministic IDs
+4. **Unix Philosophy**: Small tools that compose
 
 ---
 

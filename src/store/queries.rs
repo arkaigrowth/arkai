@@ -1320,7 +1320,7 @@ mod tests {
     #[test]
     fn test_list_active_captures_handles_missing_status() {
         let store = test_store();
-        // Capture with empty metadata — COALESCE defaults to 'inbox'
+        // Capture with empty metadata, COALESCE defaults to 'inbox'
         insert_capture(&store, "c1", "no status", serde_json::json!({}));
 
         let active = list_active_captures(&store).unwrap();
