@@ -133,8 +133,6 @@
 
 ## v1.6: Spec Kernel (Chad's Work)
 
-> Reference: `arkai-spec-bootstrap-v3.zip`
-
 - [ ] Merge spec/ folder structure
 - [ ] PR-1: Add schema_version to Rust Event struct
 - [ ] Align EventType/StepStatus enums with spec
@@ -173,7 +171,7 @@
 
 ## v3.0: Frontend / GUI
 
-- [ ] **Research complete**: see `scout_outputs/research/frontend/OPTIONS.md`
+- [ ] **Research complete**
 - [ ] **Recommended stack**: Tauri + Svelte 5
 - [ ] Transcript viewer with timestamp navigation
 - [ ] Keyframe display inline
@@ -301,7 +299,7 @@
 ### Low Priority / Future
 - [ ] PARA Areas Implementation (Health, Finance, Career, etc.)
 - [ ] Graph View optimization (auto-linking, MOC pages)
-- [ ] Score system with existing rubric (`scout_outputs/research/obsidian-reorg/SCORING_RUBRIC.md`)
+- [ ] Score system with existing rubric
 
 ### Completed (Session 5)
 - [x] Weekly note format: `YYYY-[W]ww--MMM-DD` (e.g., `2026-W04--Jan-19.md`)
