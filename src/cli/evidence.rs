@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result};
@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::evidence::{
     compute_evidence_id, compute_hash, compute_slice_hash, extract_anchor_text,
-    find_nearest_timestamp, find_quote, offset_to_line_col, Evidence, EvidenceEvent, MatchStatus,
-    Span, Status,
+    find_nearest_timestamp, find_quote, offset_to_line_col, Evidence, EvidenceBase, EvidenceEvent,
+    MatchStatus, Span, Status,
 };
 use crate::library::{ContentId, ContentType, LibraryContent};
 
@@ -304,7 +304,7 @@ pub async fn execute_ground(content_dir: &PathBuf) -> Result<()> {
         .create(true)
         .append(true)
         .open(&evidence_path)
-        .with_context(|| format!("Failed to open evidence.jsonl for writing"))?;
+        .context("Failed to open evidence.jsonl for writing")?;
 
     let mut resolved_count = 0;
     let mut ambiguous_count = 0;
@@ -325,11 +325,16 @@ pub async fn execute_ground(content_dir: &PathBuf) -> Result<()> {
 
                 resolved_count += 1;
                 Evidence::new_resolved(
-                    id,
-                    content_id.clone(),
-                    claim.claim.clone(),
-                    claim.quote.clone(),
-                    quote_sha256,
+                    EvidenceBase {
+                        id,
+                        content_id: content_id.clone(),
+                        claim: claim.claim.clone(),
+                        quote: claim.quote.clone(),
+                        quote_sha256,
+                        confidence: claim.confidence,
+                        extractor: extractor.to_string(),
+                        ts: ts.clone(),
+                    },
                     Span {
                         artifact: transcript_artifact.to_string(),
                         utf8_byte_offset: [start, end],
@@ -337,9 +342,6 @@ pub async fn execute_ground(content_dir: &PathBuf) -> Result<()> {
                         anchor_text: Some(anchor),
                         video_timestamp: video_ts,
                     },
-                    claim.confidence,
-                    extractor.to_string(),
-                    ts.clone(),
                 )
             }
             MatchStatus::Ambiguous => {
@@ -353,11 +355,16 @@ pub async fn execute_ground(content_dir: &PathBuf) -> Result<()> {
 
                 ambiguous_count += 1;
                 Evidence::new_ambiguous(
-                    id,
-                    content_id.clone(),
-                    claim.claim.clone(),
-                    claim.quote.clone(),
-                    quote_sha256,
+                    EvidenceBase {
+                        id,
+                        content_id: content_id.clone(),
+                        claim: claim.claim.clone(),
+                        quote: claim.quote.clone(),
+                        quote_sha256,
+                        confidence: claim.confidence,
+                        extractor: extractor.to_string(),
+                        ts: ts.clone(),
+                    },
                     Span {
                         artifact: transcript_artifact.to_string(),
                         utf8_byte_offset: [start, end],
@@ -366,9 +373,6 @@ pub async fn execute_ground(content_dir: &PathBuf) -> Result<()> {
                         video_timestamp: video_ts,
                     },
                     match_count,
-                    claim.confidence,
-                    extractor.to_string(),
-                    ts.clone(),
                 )
             }
             MatchStatus::Unresolved => {
@@ -376,15 +380,17 @@ pub async fn execute_ground(content_dir: &PathBuf) -> Result<()> {
 
                 unresolved_count += 1;
                 Evidence::new_unresolved(
-                    id,
-                    content_id.clone(),
-                    claim.claim.clone(),
-                    claim.quote.clone(),
-                    quote_sha256,
+                    EvidenceBase {
+                        id,
+                        content_id: content_id.clone(),
+                        claim: claim.claim.clone(),
+                        quote: claim.quote.clone(),
+                        quote_sha256,
+                        confidence: claim.confidence,
+                        extractor: extractor.to_string(),
+                        ts: ts.clone(),
+                    },
                     match_result.normalized_hint,
-                    claim.confidence,
-                    extractor.to_string(),
-                    ts.clone(),
                 )
             }
         };
@@ -471,7 +477,7 @@ pub async fn execute_show(evidence_id: &str) -> Result<()> {
 }
 
 /// Display evidence details
-async fn display_evidence(evidence: &Evidence, content_dir: &PathBuf) -> Result<()> {
+async fn display_evidence(evidence: &Evidence, content_dir: &Path) -> Result<()> {
     println!("Evidence ID: {}", evidence.id);
     println!("Content ID:  {}", evidence.content_id);
     println!("Status:      {:?}", evidence.status);
@@ -569,7 +575,7 @@ pub async fn execute_open(evidence_id: &str) -> Result<()> {
 }
 
 /// Open evidence in VS Code
-async fn open_evidence(evidence: &Evidence, content_dir: &PathBuf) -> Result<()> {
+async fn open_evidence(evidence: &Evidence, content_dir: &Path) -> Result<()> {
     let span = evidence.span.as_ref().ok_or_else(|| {
         anyhow::anyhow!(
             "Evidence {} is unresolved - no source location available",

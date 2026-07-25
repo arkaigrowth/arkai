@@ -299,7 +299,7 @@ fn process_lock_for(lock_path: &Path) -> Arc<AsyncMutex<()>> {
 }
 
 fn join_error_to_io(error: tokio::task::JoinError) -> std::io::Error {
-    std::io::Error::new(std::io::ErrorKind::Other, error.to_string())
+    std::io::Error::other(error.to_string())
 }
 
 fn approval_overrides(decision: &ApprovalDecision) -> Option<serde_json::Value> {
@@ -386,6 +386,7 @@ impl VoiceQueue {
 
             let file = std::fs::OpenOptions::new()
                 .create(true)
+                .truncate(false)
                 .read(true)
                 .write(true)
                 .open(&lock_path)?;

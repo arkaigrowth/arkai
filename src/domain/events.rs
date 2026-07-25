@@ -151,10 +151,11 @@ pub enum EventType {
 }
 
 /// Status of a step or run
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum StepStatus {
     /// Not yet started
+    #[default]
     Pending,
 
     /// Currently executing
@@ -170,24 +171,19 @@ pub enum StepStatus {
     Skipped,
 }
 
-impl Default for StepStatus {
-    fn default() -> Self {
-        Self::Pending
-    }
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Voice Capture Types
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Status of an item in the voice processing queue
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum VoiceQueueStatus {
     /// Waiting to be processed
     Pending,
 
     /// Waiting for human approval before processing
+    #[default]
     AwaitingApproval,
 
     /// Currently being processed
@@ -201,12 +197,6 @@ pub enum VoiceQueueStatus {
 
     /// Human skipped this item
     Skipped,
-}
-
-impl Default for VoiceQueueStatus {
-    fn default() -> Self {
-        Self::AwaitingApproval
-    }
 }
 
 impl std::fmt::Display for VoiceQueueStatus {

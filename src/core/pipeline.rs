@@ -130,20 +130,15 @@ impl Step {
 }
 
 /// Supported adapter types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AdapterType {
     /// Fabric CLI/API
+    #[default]
     Fabric,
 
     /// Shell command executed via /bin/sh -c
     Shell,
-}
-
-impl Default for AdapterType {
-    fn default() -> Self {
-        Self::Fabric
-    }
 }
 
 /// Source of input for a step

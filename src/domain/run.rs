@@ -178,10 +178,11 @@ impl Run {
 }
 
 /// State of a pipeline run
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case", tag = "status")]
 pub enum RunState {
     /// Currently executing
+    #[default]
     Running,
 
     /// Paused (can be resumed)
@@ -195,12 +196,6 @@ pub enum RunState {
 
     /// Safety limit was reached
     SafetyLimitReached { limit: String },
-}
-
-impl Default for RunState {
-    fn default() -> Self {
-        Self::Running
-    }
 }
 
 #[cfg(test)]

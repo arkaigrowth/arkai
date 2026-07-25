@@ -44,10 +44,11 @@ impl Artifact {
 }
 
 /// Types of artifacts that can be produced
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactType {
     /// Raw output from a step
+    #[default]
     StepOutput,
 
     /// Transcript (e.g., from YouTube)
@@ -64,12 +65,6 @@ pub enum ArtifactType {
 
     /// Reference to external document (e.g., RAGFlow doc ID)
     DocumentReference,
-}
-
-impl Default for ArtifactType {
-    fn default() -> Self {
-        Self::StepOutput
-    }
 }
 
 #[cfg(test)]

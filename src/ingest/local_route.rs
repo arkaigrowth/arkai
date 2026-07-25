@@ -520,7 +520,7 @@ pub fn parse_last_arkai_result(stdout: &str) -> Option<ArkaiResult> {
         .lines()
         .filter_map(|line| line.strip_prefix("@@ARKAI_RESULT@@"))
         .filter_map(|tail| serde_json::from_str::<ArkaiResult>(tail.trim()).ok())
-        .last()
+        .next_back()
 }
 
 fn result_summary(result: Option<&ArkaiResult>) -> String {
@@ -952,7 +952,7 @@ mod tests {
         let lines: Vec<&str> = args.lines().collect();
         assert_eq!(lines[0], "--prediarized");
         assert!(lines[1].contains(&id));
-        assert!(!lines.iter().any(|line| *line == "--engine"));
+        assert!(!lines.contains(&"--engine"));
     }
 
     #[tokio::test]

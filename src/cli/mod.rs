@@ -809,7 +809,7 @@ fn extract_title(content: &str, url: &str) -> String {
         .unwrap_or_else(|| {
             // Fallback: extract from URL
             url.split('/')
-                .last()
+                .next_back()
                 .unwrap_or("Untitled")
                 .split('?')
                 .next()
@@ -1081,8 +1081,8 @@ async fn search_semantic(query: &str, limit: usize) -> Result<()> {
 
     println!("Found {} result(s) for \"{}\":\n", results.len(), query);
     println!(
-        "{:<18} {:<7} {:<7} {:<7} {}",
-        "ID", "SCORE", "FTS", "VEC", "TITLE"
+        "{:<18} {:<7} {:<7} {:<7} TITLE",
+        "ID", "SCORE", "FTS", "VEC"
     );
     println!("{}", "-".repeat(90));
 
@@ -1334,14 +1334,16 @@ async fn chunk_and_embed_transcripts(store: &crate::store::Store) -> Result<()> 
         for chunk in &chunks {
             queries::insert_chunk(
                 store,
-                &chunk.id,
-                &chunk.item_id,
-                chunk.chunk_index as i64,
-                &chunk.text,
-                chunk.byte_start as i64,
-                chunk.byte_end as i64,
-                chunk.word_count as i64,
-                "{}",
+                &queries::NewChunk {
+                    id: &chunk.id,
+                    item_id: &chunk.item_id,
+                    chunk_index: chunk.chunk_index as i64,
+                    text: &chunk.text,
+                    byte_start: chunk.byte_start as i64,
+                    byte_end: chunk.byte_end as i64,
+                    word_count: chunk.word_count as i64,
+                    metadata: "{}",
+                },
             )?;
         }
         total_chunks += chunks.len();
@@ -1560,7 +1562,7 @@ async fn run_pattern(
         // Update catalog
         let mut catalog = Catalog::load().await?;
         let mut item = CatalogItem::new(
-            &format!("pattern://{}", pattern_name),
+            format!("pattern://{}", pattern_name),
             &title,
             ContentType::Other,
         );
