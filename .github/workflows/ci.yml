@@ -1,4 +1,4 @@
-# arkai CI — gates the voice-spine invariants on every push.
+# arkai CI: gates the voice-spine invariants on every push.
 # Inert until `main` is reconciled with origin and pushed (see
 # ~/AI/voice-memo-pipeline/docs/SPINE-STEELMAN-M3M4.md finding I9); until then the same
 # suite runs locally via the pre-commit hook installed from ops/ci/.

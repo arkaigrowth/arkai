@@ -1,6 +1,6 @@
 # Voice Poller Launchd Install
 
-Run from `/Users/alexkamysz/AI/arkai`.
+Run from the repo root.
 
 1. Install the current binary:
 
@@ -8,7 +8,7 @@ Run from `/Users/alexkamysz/AI/arkai`.
    cargo install --path .
    ```
 
-   Re-grant Full Disk Access to `/Users/alexkamysz/.cargo/bin/arkai`. TCC binds the inode, so every `cargo install` resets the grant. Only the watcher needs FDA.
+   Re-grant Full Disk Access to `~/.cargo/bin/arkai`. TCC binds the inode, so every `cargo install` resets the grant. Only the watcher needs FDA.
 
 2. Run one manual scan from an interactive terminal:
 
@@ -34,11 +34,14 @@ Run from `/Users/alexkamysz/AI/arkai`.
 
    The mode must be `600`, and the file must contain the dedicated `@arkai_voice_bot` credentials.
 
-6. Install and load both LaunchAgents:
+6. Render and load both LaunchAgents. launchd resolves neither `~` nor `$HOME` inside a plist, so the checked-in files are templates carrying a `__HOME__` placeholder that you substitute at install time:
 
    ```bash
-   install -m 644 ops/launchd/com.local.voice-watcher.plist ~/Library/LaunchAgents/
-   install -m 644 ops/launchd/com.local.voice-processor.plist ~/Library/LaunchAgents/
+   for agent in voice-watcher voice-processor; do
+     sed "s|__HOME__|$HOME|g" "ops/launchd/com.local.$agent.plist.template" \
+       > "$HOME/Library/LaunchAgents/com.local.$agent.plist"
+     chmod 644 "$HOME/Library/LaunchAgents/com.local.$agent.plist"
+   done
    launchctl load ~/Library/LaunchAgents/com.local.voice-{watcher,processor}.plist
    ```
 

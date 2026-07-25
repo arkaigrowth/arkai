@@ -12,10 +12,10 @@ use tokio::io::AsyncReadExt;
 
 use crate::adapters::{notify_best_effort, Notifier, NotifyKind};
 use crate::domain::VoiceQueueStatus;
-use crate::ingest::sources::load_voice_sources;
+use crate::ingest::sources::{expand_tilde, load_voice_sources};
 use crate::ingest::{QueueItem, VoiceQueue};
 
-const DEFAULT_TRANSCRIBE_MEMO_BIN: &str = "/Users/alexkamysz/bin/transcribe-memo";
+const DEFAULT_TRANSCRIBE_MEMO_BIN: &str = "~/bin/transcribe-memo";
 const PER_ITEM_MAX_SECS: f32 = 6.0 * 60.0 * 60.0;
 const MIN_HARD_TIMEOUT_SECS: u64 = 2 * 60 * 60;
 
@@ -362,7 +362,7 @@ async fn is_readable_file(path: &Path) -> bool {
 fn transcribe_memo_bin() -> PathBuf {
     std::env::var_os("ARKAI_TRANSCRIBE_MEMO_BIN")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_TRANSCRIBE_MEMO_BIN))
+        .unwrap_or_else(|| expand_tilde(DEFAULT_TRANSCRIBE_MEMO_BIN))
 }
 
 #[cfg(test)]
@@ -393,7 +393,7 @@ fn transcribe_memo_args_with_source_categories(
 
     if let Some(recorded_at) = item.data.recorded_at {
         args.push(OsString::from("--when"));
-        // transcribe-memo parses --when with strptime("%Y-%m-%d %H:%M") —
+        // transcribe-memo parses --when with strptime("%Y-%m-%d %H:%M"), so
         // RFC3339 would crash it. recorded_at is wall-clock time stored under
         // a UTC label (see recorded_at_for_path), so format it naively.
         args.push(OsString::from(
@@ -547,7 +547,7 @@ pub fn classify_exit(exit_code: Option<i32>, stdout: &str) -> ExitAction {
                 .unwrap_or(false)
             {
                 // The audio sentinel carries needs_human but usually no detail
-                // field — don't surface the "no result line" fallback here.
+                // field. Do not surface the "no result line" fallback here.
                 let detail = result
                     .as_ref()
                     .and_then(|result| {
@@ -558,7 +558,7 @@ pub fn classify_exit(exit_code: Option<i32>, stdout: &str) -> ExitAction {
                             .or(result.reason.as_deref())
                             .or(result.error.as_deref())
                     })
-                    .unwrap_or("review flagged needs_human — check the transcript's review notes")
+                    .unwrap_or("review flagged needs_human, check the transcript's review notes")
                     .to_string();
                 ExitAction::DoneNeedsHuman(detail)
             } else {
@@ -598,7 +598,7 @@ pub async fn alert_on_corrupt_queue_if_needed(
         return Ok(());
     }
 
-    let detail = format!("queue log has {skipped} unparseable line(s) — inspect voice_queue.jsonl");
+    let detail = format!("queue log has {skipped} unparseable line(s), inspect voice_queue.jsonl");
     let item = synthetic_alert_item("voice_queue", "voice_queue.jsonl");
     notify_best_effort(notifier, &item, NotifyKind::NeedsHuman { detail }).await;
 

@@ -8,7 +8,7 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/alexkamysz/.cargo/bin/arkai</string>
+    <string>__HOME__/.cargo/bin/arkai</string>
     <string>voice</string>
     <string>scan</string>
   </array>
@@ -25,13 +25,13 @@
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>/Users/alexkamysz/.cargo/bin:/Users/alexkamysz/.local/bin:/Users/alexkamysz/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <string>__HOME__/.cargo/bin:__HOME__/.local/bin:__HOME__/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
 
   <key>StandardOutPath</key>
-  <string>/Users/alexkamysz/Library/Logs/voice-watcher.log</string>
+  <string>__HOME__/Library/Logs/voice-watcher.log</string>
 
   <key>StandardErrorPath</key>
-  <string>/Users/alexkamysz/Library/Logs/voice-watcher.log</string>
+  <string>__HOME__/Library/Logs/voice-watcher.log</string>
 </dict>
 </plist>
