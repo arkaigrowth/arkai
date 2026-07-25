@@ -108,7 +108,7 @@ pub(crate) fn format_approval_card(item: &QueueItem) -> String {
 pub(crate) fn format_failed_card(item: &QueueItem, reason: &str) -> String {
     if item.data.private {
         return format!(
-            "❌ Private voice memo processing failed\n\nID: {id}\n\nprocessing failed — check arkai voice list\n\narkai voice retry {id}",
+            "❌ Private voice memo processing failed\n\nID: {id}\n\nprocessing failed, check arkai voice list\n\narkai voice retry {id}",
             id = item.id
         );
     }
@@ -130,7 +130,7 @@ pub(crate) fn format_failed_card(item: &QueueItem, reason: &str) -> String {
 pub(crate) fn format_needs_human_card(item: &QueueItem, detail: &str) -> String {
     if item.data.private {
         return format!(
-            "⚠️ Private voice memo needs review\n\nID: {id}\n\nprocessing failed — check arkai voice list",
+            "⚠️ Private voice memo needs review\n\nID: {id}\n\nprocessing failed, check arkai voice list",
             id = item.id
         );
     }
@@ -243,7 +243,7 @@ pub async fn notify_new_awaiting_capped(notifier: Option<&dyn Notifier>, items: 
             NotifyKind::NeedsHuman {
                 detail: format!(
                     "+{overflow} more new recording(s) enqueued this scan \
-                     (of {total} total) — review with: arkai voice list --status awaiting_approval",
+                     (of {total} total), review with: arkai voice list --status awaiting_approval",
                     total = items.len()
                 ),
             },
@@ -496,7 +496,9 @@ mod tests {
 
         let calls = stub.calls.lock().unwrap();
         assert_eq!(calls.len(), 3);
-        assert!(calls.iter().all(|(_, kind)| *kind == NotifyKind::NewAwaiting));
+        assert!(calls
+            .iter()
+            .all(|(_, kind)| *kind == NotifyKind::NewAwaiting));
     }
 
     #[test]
@@ -551,7 +553,7 @@ mod tests {
 
         for card in [failed, needs_human] {
             assert!(card.contains(&item.id));
-            assert!(card.contains("processing failed — check arkai voice list"));
+            assert!(card.contains("processing failed, check arkai voice list"));
             assert!(!card.contains("Memo 3.m4a"));
             assert!(!card.contains("source unreadable"));
             assert!(!card.contains("speaker names leaked"));

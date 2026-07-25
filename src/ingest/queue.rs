@@ -634,7 +634,7 @@ impl VoiceQueue {
 
         let cache_path = self.cache_path_for_id_and_source(&hash, file_path);
         // Skip when the copy already exists: item_id is a content hash, so an
-        // existing cache file is byte-identical — without this check every scan
+        // existing cache file is byte-identical. Without this check every scan
         // tick would re-copy the entire awaiting backlog (~142 items today).
         if !path_is_file(&cache_path).await && self.should_precopy_for_hash(&hash).await? {
             copy_to_cache(file_path, &cache_path).await?;

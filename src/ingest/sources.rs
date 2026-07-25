@@ -18,7 +18,7 @@ impl VoiceSourceHandler {
             "voicememos_container" => Ok(Some(Self::VoicememosContainer)),
             "plain_audio_dir" => Ok(Some(Self::PlainAudioDir)),
             "prediarized_transcript" => Ok(Some(Self::PrediarizedTranscript)),
-            "zoom_meeting_folder" => anyhow::bail!("zoom sources are V2 — run Zoom manually"),
+            "zoom_meeting_folder" => anyhow::bail!("zoom sources are V2, run Zoom manually"),
             other => {
                 tracing::warn!(
                     handler = other,
