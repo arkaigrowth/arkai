@@ -387,6 +387,9 @@ fn transcribe_memo_args_with_source_categories(
 
     args.push(OsString::from("--stem"));
     args.push(OsString::from(file_stem(&item.data.file_name)));
+    if item.data.private {
+        args.push(OsString::from("--private"));
+    }
 
     if let Some(recorded_at) = item.data.recorded_at {
         args.push(OsString::from("--when"));
@@ -800,6 +803,23 @@ mod tests {
     }
 
     #[test]
+    fn test_transcribe_memo_args_private_normal_audio_forwarding() {
+        for private in [false, true] {
+            let mut item = sample_item_with_path(PathBuf::from("/tmp/input.m4a"));
+            item.data.private = private;
+
+            let args: Vec<String> = transcribe_memo_args(&item, Path::new("/tmp/input.m4a"))
+                .into_iter()
+                .map(|arg| arg.to_string_lossy().to_string())
+                .collect();
+            let private_count = args.iter().filter(|arg| *arg == "--private").count();
+            let expected = if private { 1 } else { 0 };
+
+            assert_eq!(private_count, expected);
+        }
+    }
+
+    #[test]
     fn test_transcribe_memo_args_category_from_source_config_when_human_gave_none() {
         let mut item = sample_item_with_path(PathBuf::from("/tmp/input.m4a"));
         item.data.source = Some("private-source".to_string());
@@ -858,6 +878,24 @@ mod tests {
         assert_eq!(args[0], "--prediarized");
         assert_eq!(args[1], "/tmp/call.md");
         assert!(!args.iter().any(|arg| arg == "--engine"));
+    }
+
+    #[test]
+    fn test_transcribe_memo_args_private_prediarized_forwarding() {
+        for private in [false, true] {
+            let mut item = sample_item_with_path(PathBuf::from("/tmp/call.md"));
+            item.data.kind = Some("prediarized".to_string());
+            item.data.private = private;
+
+            let args: Vec<String> = transcribe_memo_args(&item, Path::new("/tmp/call.md"))
+                .into_iter()
+                .map(|arg| arg.to_string_lossy().to_string())
+                .collect();
+            let private_count = args.iter().filter(|arg| *arg == "--private").count();
+            let expected = if private { 1 } else { 0 };
+
+            assert_eq!(private_count, expected);
+        }
     }
 
     #[tokio::test]
