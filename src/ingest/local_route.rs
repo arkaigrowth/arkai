@@ -1011,17 +1011,21 @@ mod tests {
         .await;
         let start = Instant::now();
 
+        // The budget has to outlast /bin/sh startup plus a fork, or the group is
+        // killed before the grandchild records its pid and the assertion below
+        // reads a file that never appeared. Sibling tests that spawn processes
+        // make 500ms too tight on a loaded machine.
         process_one_item(
             &queue,
             &item,
             None,
             Some(&script),
-            Some(Duration::from_millis(500)),
+            Some(Duration::from_secs(2)),
         )
         .await
         .unwrap();
 
-        assert!(start.elapsed() < Duration::from_secs(2));
+        assert!(start.elapsed() < Duration::from_secs(8));
         let failed = queue.get(&id).await.unwrap().unwrap();
         assert_eq!(failed.status, VoiceQueueStatus::Failed);
         assert!(failed
