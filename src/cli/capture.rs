@@ -101,8 +101,8 @@ async fn embed_capture(store: &Store, id: &str, text: &str, tags: &[String]) -> 
         }
     }
 
-    let config = EmbeddingConfig::from_store_config(&pairs)
-        .context("Failed to load embedding config")?;
+    let config =
+        EmbeddingConfig::from_store_config(&pairs).context("Failed to load embedding config")?;
     let dims = config.dimensions;
     let model_name = config.model.clone();
     let provider = OllamaProvider::new(config);

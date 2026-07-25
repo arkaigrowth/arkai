@@ -95,20 +95,17 @@ pub fn chunk_text(item_id: &str, text: &str, strategy: &ChunkStrategy) -> Vec<Ch
 
 /// Common abbreviations that should NOT be treated as sentence boundaries.
 const ABBREVIATIONS: &[&str] = &[
-    "Dr.", "Mr.", "Mrs.", "Ms.", "Prof.", "Sr.", "Jr.",
-    "U.S.", "U.K.", "U.N.", "E.U.",
-    "Inc.", "Ltd.", "Corp.", "Co.",
-    "St.", "Ave.", "Blvd.",
-    "Jan.", "Feb.", "Mar.", "Apr.", "Aug.", "Sep.", "Oct.", "Nov.", "Dec.",
-    "vs.", "etc.", "approx.", "dept.",
-    "i.e.", "e.g.",
+    "Dr.", "Mr.", "Mrs.", "Ms.", "Prof.", "Sr.", "Jr.", "U.S.", "U.K.", "U.N.", "E.U.", "Inc.",
+    "Ltd.", "Corp.", "Co.", "St.", "Ave.", "Blvd.", "Jan.", "Feb.", "Mar.", "Apr.", "Aug.", "Sep.",
+    "Oct.", "Nov.", "Dec.", "vs.", "etc.", "approx.", "dept.", "i.e.", "e.g.",
 ];
 
 /// Check if a period at `period_pos` in `text` is part of an abbreviation.
 fn is_abbreviation(text: &str, period_pos: usize) -> bool {
     // Get the "word" ending at period_pos by scanning backwards
     let before = &text[..period_pos];
-    let word_start = before.rfind(|c: char| c.is_whitespace() || c == '\n')
+    let word_start = before
+        .rfind(|c: char| c.is_whitespace() || c == '\n')
         .map(|p| p + 1)
         .unwrap_or(0);
     let candidate = &text[word_start..=period_pos];
@@ -421,7 +418,12 @@ mod tests {
     fn test_sentence_split_basic() {
         let text = "Hello world. How are you? Fine.";
         let sentences = split_sentences(text);
-        assert_eq!(sentences.len(), 3, "Expected 3 sentences, got {:?}", sentences);
+        assert_eq!(
+            sentences.len(),
+            3,
+            "Expected 3 sentences, got {:?}",
+            sentences
+        );
         assert_eq!(sentences[0].0, "Hello world.");
         assert_eq!(sentences[1].0, "How are you?");
         assert_eq!(sentences[2].0, "Fine.");
@@ -431,7 +433,12 @@ mod tests {
     fn test_sentence_split_abbreviations() {
         let text = "Dr. Smith went to U.S. embassy.";
         let sentences = split_sentences(text);
-        assert_eq!(sentences.len(), 1, "Should be 1 sentence, got {:?}", sentences);
+        assert_eq!(
+            sentences.len(),
+            1,
+            "Should be 1 sentence, got {:?}",
+            sentences
+        );
         assert_eq!(sentences[0].0, "Dr. Smith went to U.S. embassy.");
     }
 
@@ -439,7 +446,12 @@ mod tests {
     fn test_sentence_split_numbers() {
         let text = "The cost is $3.14 per unit.";
         let sentences = split_sentences(text);
-        assert_eq!(sentences.len(), 1, "Should be 1 sentence, got {:?}", sentences);
+        assert_eq!(
+            sentences.len(),
+            1,
+            "Should be 1 sentence, got {:?}",
+            sentences
+        );
         assert_eq!(sentences[0].0, "The cost is $3.14 per unit.");
     }
 
@@ -463,7 +475,11 @@ mod tests {
         };
         let chunks = chunk_text("test-item", &text, &strategy);
 
-        assert!(chunks.len() >= 2, "Expected at least 2 chunks, got {}", chunks.len());
+        assert!(
+            chunks.len() >= 2,
+            "Expected at least 2 chunks, got {}",
+            chunks.len()
+        );
 
         // Each chunk should have roughly target_words (within reasonable bounds)
         for chunk in &chunks {
@@ -508,7 +524,12 @@ mod tests {
     fn test_chunk_overlap() {
         // Create text with distinct sentences to verify overlap
         let sentences: Vec<String> = (0..80)
-            .map(|i| format!("Sentence number {} has several words to fill space in the text document here.", i))
+            .map(|i| {
+                format!(
+                    "Sentence number {} has several words to fill space in the text document here.",
+                    i
+                )
+            })
             .collect();
         let text = sentences.join(" ");
 
@@ -610,10 +631,16 @@ mod tests {
         let chunks1 = chunk_text("item-abc", text, &strategy);
         let chunks2 = chunk_text("item-abc", text, &strategy);
 
-        assert_eq!(chunks1[0].id, chunks2[0].id, "Same input should produce same IDs");
+        assert_eq!(
+            chunks1[0].id, chunks2[0].id,
+            "Same input should produce same IDs"
+        );
 
         // Different item_id -> different chunk ID
         let chunks3 = chunk_text("item-xyz", text, &strategy);
-        assert_ne!(chunks1[0].id, chunks3[0].id, "Different item_id should produce different IDs");
+        assert_ne!(
+            chunks1[0].id, chunks3[0].id,
+            "Different item_id should produce different IDs"
+        );
     }
 }

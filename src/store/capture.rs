@@ -59,9 +59,8 @@ pub struct CaptureClassification {
 
 /// Action verbs that signal a todo item.
 const ACTION_VERBS: &[&str] = &[
-    "call", "buy", "review", "send", "email", "check", "fix", "update",
-    "submit", "schedule", "book", "cancel", "pay", "write", "create",
-    "finish", "complete", "read", "watch", "follow",
+    "call", "buy", "review", "send", "email", "check", "fix", "update", "submit", "schedule",
+    "book", "cancel", "pay", "write", "create", "finish", "complete", "read", "watch", "follow",
 ];
 
 /// Classify a capture from its text content.
@@ -128,7 +127,7 @@ fn try_classify_reminder(text: &str) -> Option<CaptureClassification> {
     if text.contains("next week") {
         let wd = today.weekday().num_days_from_monday(); // Mon=0 .. Sun=6
         let days_to_add = match wd {
-            0 => 7, // Monday -> next Monday
+            0 => 7,     // Monday -> next Monday
             n => 7 - n, // Other days -> coming Monday
         };
         let next_monday = today + chrono::Duration::days(days_to_add as i64);
@@ -383,7 +382,12 @@ mod tests {
         for verb in ACTION_VERBS {
             let text = format!("{} something important", verb);
             let c = auto_classify(&text);
-            assert_eq!(c.kind, CaptureKind::Todo, "Verb '{}' should produce Todo", verb);
+            assert_eq!(
+                c.kind,
+                CaptureKind::Todo,
+                "Verb '{}' should produce Todo",
+                verb
+            );
         }
     }
 

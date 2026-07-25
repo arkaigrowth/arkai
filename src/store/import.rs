@@ -619,9 +619,7 @@ mod tests {
         assert_eq!(stats.skipped, 0);
         assert_eq!(stats.errors, 0);
 
-        let item = queries::get_item(&store, "lib_meta_001")
-            .unwrap()
-            .unwrap();
+        let item = queries::get_item(&store, "lib_meta_001").unwrap().unwrap();
         assert_eq!(item.title, "Some Video");
         assert!(item.artifacts.contains(&"summary.md".to_string()));
         assert!(item.artifacts.contains(&"wisdom.md".to_string()));

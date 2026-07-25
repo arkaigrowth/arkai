@@ -37,8 +37,9 @@ impl Store {
     pub fn open(path: &Path) -> Result<Self> {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create store directory: {}", parent.display()))?;
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create store directory: {}", parent.display())
+            })?;
         }
 
         let conn = Connection::open(path)
@@ -161,7 +162,9 @@ mod tests {
         assert_eq!(model, Some("mxbai-embed-large".to_string()));
 
         // Override
-        store.set_config("embedding_model", "text-embedding-3-small").unwrap();
+        store
+            .set_config("embedding_model", "text-embedding-3-small")
+            .unwrap();
         let model = store.get_config("embedding_model").unwrap();
         assert_eq!(model, Some("text-embedding-3-small".to_string()));
 

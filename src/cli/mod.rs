@@ -313,9 +313,7 @@ impl Cli {
             } => capture::execute_capture(text, kind, tag, due).await,
             Commands::Today { json } => triage::execute_today(json).await,
             Commands::Done { item_id } => triage::execute_done(item_id).await,
-            Commands::Snooze { item_id, until } => {
-                triage::execute_snooze(item_id, until).await
-            }
+            Commands::Snooze { item_id, until } => triage::execute_snooze(item_id, until).await,
         }
     }
 }
@@ -635,8 +633,8 @@ async fn ingest_youtube(url: &str, tags: Option<String>, title: Option<String>) 
         .context("Failed to get video ID. Is yt-dlp installed at /opt/homebrew/bin/yt-dlp?")?;
     let video_id = video_id.trim().to_string();
 
-    let yt_title = run_cmd(yt_dlp, &["--print", "title", url])
-        .context("Failed to get video title")?;
+    let yt_title =
+        run_cmd(yt_dlp, &["--print", "title", url]).context("Failed to get video title")?;
     let yt_title = yt_title.trim().to_string();
     let final_title = title.unwrap_or(yt_title);
 
@@ -758,12 +756,7 @@ fn run_cmd(cmd: &str, args: &[&str]) -> Result<String> {
         .with_context(|| format!("Failed to run: {} {}", cmd, args.join(" ")))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!(
-            "{} failed (exit {}): {}",
-            cmd,
-            output.status,
-            stderr.trim()
-        );
+        anyhow::bail!("{} failed (exit {}): {}", cmd, output.status, stderr.trim());
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
@@ -1052,8 +1045,8 @@ fn load_embedding_pairs(store: &crate::store::Store) -> Result<Vec<(String, Stri
 
 /// Semantic search using the SQLite store's hybrid FTS5 + vector search.
 async fn search_semantic(query: &str, limit: usize) -> Result<()> {
+    use crate::store::embedding::{EmbeddingConfig, EmbeddingProvider, OllamaProvider};
     use crate::store::{self, StoreConfig};
-    use crate::store::embedding::{EmbeddingConfig, OllamaProvider, EmbeddingProvider};
 
     let db_path = StoreConfig::default_path()?;
     let store = store::Store::open(&db_path)?;
@@ -1073,7 +1066,9 @@ async fn search_semantic(query: &str, limit: usize) -> Result<()> {
 
     // Embed the query
     println!("Embedding query...");
-    let query_vec: Vec<f32> = provider.embed(query).await
+    let query_vec: Vec<f32> = provider
+        .embed(query)
+        .await
         .context("Failed to embed query. Is Ollama running with the right model?")?;
 
     // Run multi-level search (items + chunks)
@@ -1141,17 +1136,21 @@ async fn execute_store(command: StoreCommands) -> Result<()> {
             let content = store::queries::count_items(&store, Some("content"))?;
             let emails = store::queries::count_items(&store, Some("email"))?;
             let model = store.get_config("embedding_model")?.unwrap_or_default();
-            let dims = store.get_config("embedding_dimensions")?.unwrap_or_default();
+            let dims = store
+                .get_config("embedding_dimensions")?
+                .unwrap_or_default();
 
-            let embed_count: i64 = store.conn().query_row(
-                "SELECT COUNT(*) FROM embeddings", [], |row| row.get(0),
-            )?;
+            let embed_count: i64 =
+                store
+                    .conn()
+                    .query_row("SELECT COUNT(*) FROM embeddings", [], |row| row.get(0))?;
             let chunk_count = store::queries::count_chunks(&store, None)?;
-            let chunk_embed_count: i64 = store.conn().query_row(
-                "SELECT COUNT(*) FROM chunk_embeddings",
-                [],
-                |row| row.get(0),
-            )?;
+            let chunk_embed_count: i64 =
+                store
+                    .conn()
+                    .query_row("SELECT COUNT(*) FROM chunk_embeddings", [], |row| {
+                        row.get(0)
+                    })?;
             let captures = store::queries::count_items(&store, Some("capture"))?;
 
             println!("Store: {}", db_path.display());
@@ -1161,10 +1160,7 @@ async fn execute_store(command: StoreCommands) -> Result<()> {
                 items, content, captures, emails
             );
             println!("Embeddings: {} / {} items", embed_count, items);
-            println!(
-                "Chunks: {} ({} embedded)",
-                chunk_count, chunk_embed_count
-            );
+            println!("Chunks: {} ({} embedded)", chunk_count, chunk_embed_count);
             println!("Model: {} ({}d)", model, dims);
             Ok(())
         }
@@ -1178,7 +1174,10 @@ async fn execute_store(command: StoreCommands) -> Result<()> {
 
             // Import catalog
             let catalog_path = catalog.unwrap_or_else(|| {
-                dirs::home_dir().unwrap().join(".arkai").join("catalog.json")
+                dirs::home_dir()
+                    .unwrap()
+                    .join(".arkai")
+                    .join("catalog.json")
             });
             if catalog_path.exists() {
                 println!("Importing catalog from: {}", catalog_path.display());
@@ -1215,7 +1214,7 @@ async fn execute_store(command: StoreCommands) -> Result<()> {
 
 /// Compute embeddings for all items that don't have one yet.
 async fn compute_embeddings_for_store(store: &crate::store::Store) -> Result<()> {
-    use crate::store::embedding::{EmbeddingConfig, OllamaProvider, EmbeddingProvider};
+    use crate::store::embedding::{EmbeddingConfig, EmbeddingProvider, OllamaProvider};
     use crate::store::queries;
 
     let pairs = load_embedding_pairs(store)?;
@@ -1244,14 +1243,21 @@ async fn compute_embeddings_for_store(store: &crate::store::Store) -> Result<()>
             Ok(vector) => {
                 queries::store_embedding(store, &item.id, &model_name, dims as i32, &vector)?;
                 embedded += 1;
-                print!("\r  Embedded {}/{} items...", embedded + skipped, items.len());
+                print!(
+                    "\r  Embedded {}/{} items...",
+                    embedded + skipped,
+                    items.len()
+                );
             }
             Err(e) => {
                 eprintln!("\n  Warning: failed to embed '{}': {}", item.title, e);
             }
         }
     }
-    println!("\r  Embedded {} items ({} already had embeddings).", embedded, skipped);
+    println!(
+        "\r  Embedded {} items ({} already had embeddings).",
+        embedded, skipped
+    );
     Ok(())
 }
 
