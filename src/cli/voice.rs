@@ -169,9 +169,16 @@ pub async fn execute(command: VoiceCommands) -> Result<()> {
             max_hours,
             dry_run,
         } => {
-            execute_process(
-                once, &route, &model, bot_token, chat_id, limit, max_hours, dry_run,
-            )
+            execute_process(ProcessOptions {
+                once,
+                route,
+                model,
+                bot_token,
+                chat_id,
+                limit,
+                max_hours,
+                dry_run,
+            })
             .await
         }
         VoiceCommands::List { status, limit } => execute_list(status, limit).await,
@@ -549,33 +556,43 @@ async fn execute_watch(once: bool, path: Option<String>) -> Result<()> {
 struct ProcessCaps {
     limit: Option<u32>,
     max_hours: Option<f32>,
-    dry_run: bool,
 }
 
-/// Process pending voice memos and send to Claudia
-async fn execute_process(
+/// Everything `arkai voice process` was invoked with. Mirrors the
+/// `VoiceCommands::Process` variant.
+struct ProcessOptions {
     once: bool,
-    route: &str,
-    model: &str,
+    route: String,
+    model: String,
     bot_token: Option<String>,
     chat_id: Option<String>,
     limit: Option<u32>,
     max_hours: Option<f32>,
     dry_run: bool,
-) -> Result<()> {
-    let queue = VoiceQueue::open_default().await?;
-    let caps = ProcessCaps {
+}
+
+/// Process pending voice memos and send to Claudia
+async fn execute_process(options: ProcessOptions) -> Result<()> {
+    let ProcessOptions {
+        once,
+        route,
+        model,
+        bot_token,
+        chat_id,
         limit,
         max_hours,
         dry_run,
-    };
+    } = options;
+
+    let queue = VoiceQueue::open_default().await?;
+    let caps = ProcessCaps { limit, max_hours };
 
     // Handle dry-run mode
     if dry_run {
         return execute_dry_run(&queue, &caps).await;
     }
 
-    match route {
+    match route.as_str() {
         "local" => {
             let notifier = build_default_notifier();
             let local_caps = LocalRouteCaps {
@@ -586,7 +603,7 @@ async fn execute_process(
         }
         "telegram" => execute_process_telegram(once, bot_token, chat_id, &queue, &caps).await,
         "clawdbot" => {
-            execute_process_clawdbot(once, model, chat_id.as_deref(), &queue, &caps).await
+            execute_process_clawdbot(once, &model, chat_id.as_deref(), &queue, &caps).await
         }
         _ => anyhow::bail!(
             "Unknown route: {}. Use 'local', 'telegram', or 'clawdbot'",

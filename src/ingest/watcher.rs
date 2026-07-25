@@ -190,12 +190,10 @@ impl VoiceMemoWatcher {
             }
 
             // Pre-validate with ffprobe for .qta files
-            if is_qta_file(&path) {
-                if !validate_audio_readable(&path).await {
-                    tracing::info!("Deferred (ffprobe failed): {}", path.display());
-                    result.deferred += 1;
-                    continue;
-                }
+            if is_qta_file(&path) && !validate_audio_readable(&path).await {
+                tracing::info!("Deferred (ffprobe failed): {}", path.display());
+                result.deferred += 1;
+                continue;
             }
 
             // Normalize .qta → .m4a if needed (before hashing/enqueueing)
@@ -893,18 +891,16 @@ async fn run_watcher(
         for (path, size) in stable_files {
             // Pre-normalize validation: verify file is readable with ffprobe
             // If this fails, the file is likely still syncing despite passing stability checks
-            if is_qta_file(&path) {
-                if !validate_audio_readable(&path).await {
-                    tracing::info!(
-                        "Deferred (ffprobe failed, still syncing?): {}",
-                        path.display()
-                    );
-                    // Reset for retry - don't remove from pending
-                    if let Some(state) = pending.get_mut(&path) {
-                        state.reset_for_retry();
-                    }
-                    continue;
+            if is_qta_file(&path) && !validate_audio_readable(&path).await {
+                tracing::info!(
+                    "Deferred (ffprobe failed, still syncing?): {}",
+                    path.display()
+                );
+                // Reset for retry - don't remove from pending
+                if let Some(state) = pending.get_mut(&path) {
+                    state.reset_for_retry();
                 }
+                continue;
             }
 
             // Normalize .qta → .m4a if needed (before hashing/enqueueing)

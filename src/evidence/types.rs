@@ -165,19 +165,32 @@ pub enum EvidenceEvent {
     },
 }
 
+/// The fields every evidence entry carries regardless of how the quote resolved.
+#[derive(Debug, Clone)]
+pub struct EvidenceBase {
+    pub id: String,
+    pub content_id: String,
+    pub claim: String,
+    pub quote: String,
+    pub quote_sha256: String,
+    pub confidence: f64,
+    pub extractor: String,
+    pub ts: String,
+}
+
 impl Evidence {
     /// Create a new resolved evidence entry
-    pub fn new_resolved(
-        id: String,
-        content_id: String,
-        claim: String,
-        quote: String,
-        quote_sha256: String,
-        span: Span,
-        confidence: f64,
-        extractor: String,
-        ts: String,
-    ) -> Self {
+    pub fn new_resolved(base: EvidenceBase, span: Span) -> Self {
+        let EvidenceBase {
+            id,
+            content_id,
+            claim,
+            quote,
+            quote_sha256,
+            confidence,
+            extractor,
+            ts,
+        } = base;
         Self {
             id,
             content_id,
@@ -199,18 +212,17 @@ impl Evidence {
     }
 
     /// Create a new ambiguous evidence entry
-    pub fn new_ambiguous(
-        id: String,
-        content_id: String,
-        claim: String,
-        quote: String,
-        quote_sha256: String,
-        span: Span,
-        match_count: usize,
-        confidence: f64,
-        extractor: String,
-        ts: String,
-    ) -> Self {
+    pub fn new_ambiguous(base: EvidenceBase, span: Span, match_count: usize) -> Self {
+        let EvidenceBase {
+            id,
+            content_id,
+            claim,
+            quote,
+            quote_sha256,
+            confidence,
+            extractor,
+            ts,
+        } = base;
         Self {
             id,
             content_id,
@@ -232,17 +244,17 @@ impl Evidence {
     }
 
     /// Create a new unresolved evidence entry
-    pub fn new_unresolved(
-        id: String,
-        content_id: String,
-        claim: String,
-        quote: String,
-        quote_sha256: String,
-        normalized_hint: bool,
-        confidence: f64,
-        extractor: String,
-        ts: String,
-    ) -> Self {
+    pub fn new_unresolved(base: EvidenceBase, normalized_hint: bool) -> Self {
+        let EvidenceBase {
+            id,
+            content_id,
+            claim,
+            quote,
+            quote_sha256,
+            confidence,
+            extractor,
+            ts,
+        } = base;
         let (method, reason) = if normalized_hint {
             (
                 ResolutionMethod::NormalizedHint,

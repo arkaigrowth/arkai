@@ -461,8 +461,7 @@ mod tests {
         // 80 sentences * 11 words = ~880 words; should produce at least 2 chunks at target 400
         // (first group ~400 words, second group ~480 words >= min_words 200)
         let sentence = "This is a test sentence with about ten words in it.";
-        let text = std::iter::repeat(sentence)
-            .take(80)
+        let text = std::iter::repeat_n(sentence, 80)
             .collect::<Vec<_>>()
             .join(" ");
         let wc = word_count(&text);
@@ -498,8 +497,7 @@ mod tests {
         // At target=400, first group takes ~36 sentences (~400 words)
         // Remaining ~9 sentences (~100 words) < min_words(200), should merge
         let sentence = "This is a test sentence with about eleven words in it here.";
-        let text = std::iter::repeat(sentence)
-            .take(45)
+        let text = std::iter::repeat_n(sentence, 45)
             .collect::<Vec<_>>()
             .join(" ");
 

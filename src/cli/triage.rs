@@ -51,7 +51,7 @@ pub async fn execute_today(json_output: bool) -> Result<()> {
     Ok(())
 }
 
-fn group_by_horizon<'a>(items: &'a [Item]) -> (Vec<&'a Item>, Vec<&'a Item>, Vec<&'a Item>) {
+fn group_by_horizon(items: &[Item]) -> (Vec<&Item>, Vec<&Item>, Vec<&Item>) {
     let mut now = Vec::new();
     let mut week = Vec::new();
     let mut inbox = Vec::new();
@@ -408,7 +408,7 @@ mod tests {
         let active = queries::list_active_captures(&store).unwrap();
         let (mut now, _, _) = group_by_horizon(&active);
 
-        now.sort_by(|a, b| priority_weight(a).cmp(&priority_weight(b)));
+        now.sort_by_key(|item| priority_weight(item));
         assert_eq!(now[0].title, "must task");
         assert_eq!(now[1].title, "should task");
         assert_eq!(now[2].title, "could task");

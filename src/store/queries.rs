@@ -404,25 +404,28 @@ pub fn items_for_entity(store: &Store, entity_id: &str) -> Result<Vec<Item>> {
 // Evidence CRUD
 // ─────────────────────────────────────────────────────────────────
 
+/// An evidence row about to be written. Mirrors the `evidence` table minus
+/// `created_at`, which `insert_evidence` stamps.
+pub struct NewEvidence<'a> {
+    pub id: &'a str,
+    pub item_id: &'a str,
+    pub claim: &'a str,
+    pub quote: &'a str,
+    pub quote_sha256: &'a str,
+    pub status: &'a str,
+    pub resolution_json: &'a str,
+    pub span_artifact: Option<&'a str>,
+    pub span_start: Option<i64>,
+    pub span_end: Option<i64>,
+    pub span_sha256: Option<&'a str>,
+    pub anchor_text: Option<&'a str>,
+    pub video_timestamp: Option<&'a str>,
+    pub confidence: f64,
+    pub extractor: &'a str,
+}
+
 /// Insert an evidence entry.
-pub fn insert_evidence(
-    store: &Store,
-    id: &str,
-    item_id: &str,
-    claim: &str,
-    quote: &str,
-    quote_sha256: &str,
-    status: &str,
-    resolution_json: &str,
-    span_artifact: Option<&str>,
-    span_start: Option<i64>,
-    span_end: Option<i64>,
-    span_sha256: Option<&str>,
-    anchor_text: Option<&str>,
-    video_timestamp: Option<&str>,
-    confidence: f64,
-    extractor: &str,
-) -> Result<bool> {
+pub fn insert_evidence(store: &Store, evidence: &NewEvidence<'_>) -> Result<bool> {
     let now = Utc::now().to_rfc3339();
     let changes = store.conn().execute(
         "INSERT OR IGNORE INTO evidence
@@ -431,21 +434,21 @@ pub fn insert_evidence(
           video_timestamp, confidence, extractor, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
-            id,
-            item_id,
-            claim,
-            quote,
-            quote_sha256,
-            status,
-            resolution_json,
-            span_artifact,
-            span_start,
-            span_end,
-            span_sha256,
-            anchor_text,
-            video_timestamp,
-            confidence,
-            extractor,
+            evidence.id,
+            evidence.item_id,
+            evidence.claim,
+            evidence.quote,
+            evidence.quote_sha256,
+            evidence.status,
+            evidence.resolution_json,
+            evidence.span_artifact,
+            evidence.span_start,
+            evidence.span_end,
+            evidence.span_sha256,
+            evidence.anchor_text,
+            evidence.video_timestamp,
+            evidence.confidence,
+            evidence.extractor,
             now,
         ],
     )?;
@@ -562,22 +565,33 @@ pub struct ChunkRow {
     pub word_count: i64,
 }
 
+/// A chunk row about to be written. Mirrors the `chunks` table.
+pub struct NewChunk<'a> {
+    pub id: &'a str,
+    pub item_id: &'a str,
+    pub chunk_index: i64,
+    pub text: &'a str,
+    pub byte_start: i64,
+    pub byte_end: i64,
+    pub word_count: i64,
+    pub metadata: &'a str,
+}
+
 /// Insert a chunk. Uses INSERT OR REPLACE for idempotency.
-pub fn insert_chunk(
-    store: &Store,
-    id: &str,
-    item_id: &str,
-    chunk_index: i64,
-    text: &str,
-    byte_start: i64,
-    byte_end: i64,
-    word_count: i64,
-    metadata: &str,
-) -> Result<()> {
+pub fn insert_chunk(store: &Store, chunk: &NewChunk<'_>) -> Result<()> {
     store.conn().execute(
         "INSERT OR REPLACE INTO chunks (id, item_id, chunk_index, text, byte_start, byte_end, word_count, metadata)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![id, item_id, chunk_index, text, byte_start, byte_end, word_count, metadata],
+        params![
+            chunk.id,
+            chunk.item_id,
+            chunk.chunk_index,
+            chunk.text,
+            chunk.byte_start,
+            chunk.byte_end,
+            chunk.word_count,
+            chunk.metadata
+        ],
     )?;
     Ok(())
 }
@@ -871,7 +885,7 @@ mod tests {
             }
         }
 
-        fn as_upsert(&self) -> UpsertItem {
+        fn as_upsert(&self) -> UpsertItem<'_> {
             UpsertItem {
                 id: "abc123def456",
                 item_type: "content",
@@ -1230,21 +1244,23 @@ mod tests {
 
         let inserted = insert_evidence(
             &store,
-            "ev_001",
-            "abc123def456",
-            "Rust is memory safe",
-            "Rust guarantees memory safety without garbage collection",
-            "sha256:abc123",
-            "resolved",
-            r#"{"method":"exact","match_count":1,"match_rank":1}"#,
-            Some("transcript.md"),
-            Some(1024),
-            Some(1090),
-            Some("sha256:slice123"),
-            Some("...guarantees memory safety..."),
-            Some("00:15:30"),
-            0.95,
-            "extract_claims",
+            &NewEvidence {
+                id: "ev_001",
+                item_id: "abc123def456",
+                claim: "Rust is memory safe",
+                quote: "Rust guarantees memory safety without garbage collection",
+                quote_sha256: "sha256:abc123",
+                status: "resolved",
+                resolution_json: r#"{"method":"exact","match_count":1,"match_rank":1}"#,
+                span_artifact: Some("transcript.md"),
+                span_start: Some(1024),
+                span_end: Some(1090),
+                span_sha256: Some("sha256:slice123"),
+                anchor_text: Some("...guarantees memory safety..."),
+                video_timestamp: Some("00:15:30"),
+                confidence: 0.95,
+                extractor: "extract_claims",
+            },
         )
         .unwrap();
         assert!(inserted);
@@ -1260,45 +1276,27 @@ mod tests {
         let store = test_store();
         upsert_item(&store, &SampleData::new().as_upsert()).unwrap();
 
-        insert_evidence(
-            &store,
-            "ev_001",
-            "abc123def456",
-            "claim",
-            "quote",
-            "sha",
-            "resolved",
-            "{}",
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            0.9,
-            "test",
-        )
-        .unwrap();
+        let entry = NewEvidence {
+            id: "ev_001",
+            item_id: "abc123def456",
+            claim: "claim",
+            quote: "quote",
+            quote_sha256: "sha",
+            status: "resolved",
+            resolution_json: "{}",
+            span_artifact: None,
+            span_start: None,
+            span_end: None,
+            span_sha256: None,
+            anchor_text: None,
+            video_timestamp: None,
+            confidence: 0.9,
+            extractor: "test",
+        };
 
-        let dup = insert_evidence(
-            &store,
-            "ev_001",
-            "abc123def456",
-            "claim",
-            "quote",
-            "sha",
-            "resolved",
-            "{}",
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            0.9,
-            "test",
-        )
-        .unwrap();
+        insert_evidence(&store, &entry).unwrap();
+
+        let dup = insert_evidence(&store, &entry).unwrap();
         assert!(!dup); // duplicate ignored
     }
 

@@ -43,6 +43,6 @@ pub use spans::{
 };
 
 pub use types::{
-    EntitiesFile, Entity, EntityMention, Evidence, EvidenceEvent, Resolution, ResolutionMethod,
-    Span, Status, UnresolvedReason,
+    EntitiesFile, Entity, EntityMention, Evidence, EvidenceBase, EvidenceEvent, Resolution,
+    ResolutionMethod, Span, Status, UnresolvedReason,
 };
