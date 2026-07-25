@@ -307,10 +307,30 @@ mod tests {
     #[test]
     fn test_today_groups_by_horizon() {
         let store = test_store();
-        insert_capture(&store, "c1", "now task", json!({"status":"inbox","horizon":"now","priority":"must"}));
-        insert_capture(&store, "c2", "week task", json!({"status":"inbox","horizon":"week","priority":"should"}));
-        insert_capture(&store, "c3", "later note", json!({"status":"inbox","horizon":"later","priority":"could"}));
-        insert_capture(&store, "c4", "done task", json!({"status":"done","horizon":"now","priority":"must"}));
+        insert_capture(
+            &store,
+            "c1",
+            "now task",
+            json!({"status":"inbox","horizon":"now","priority":"must"}),
+        );
+        insert_capture(
+            &store,
+            "c2",
+            "week task",
+            json!({"status":"inbox","horizon":"week","priority":"should"}),
+        );
+        insert_capture(
+            &store,
+            "c3",
+            "later note",
+            json!({"status":"inbox","horizon":"later","priority":"could"}),
+        );
+        insert_capture(
+            &store,
+            "c4",
+            "done task",
+            json!({"status":"done","horizon":"now","priority":"must"}),
+        );
 
         let active = queries::list_active_captures(&store).unwrap();
         let (now, week, inbox) = group_by_horizon(&active);
@@ -326,13 +346,18 @@ mod tests {
         for i in 0..8 {
             let id = format!("cap{:04}", i);
             let title = format!("Task {}", i);
-            insert_capture(&store, &id, &title, json!({"status":"inbox","horizon":"now","priority":"should"}));
+            insert_capture(
+                &store,
+                &id,
+                &title,
+                json!({"status":"inbox","horizon":"now","priority":"should"}),
+            );
         }
 
         let active = queries::list_active_captures(&store).unwrap();
         let (now, _, _) = group_by_horizon(&active);
         assert_eq!(now.len(), 8); // all 8 retrieved
-        // Display cap applied at render time
+                                  // Display cap applied at render time
         assert!(now.len() > MAX_PER_SECTION);
     }
 
@@ -361,9 +386,24 @@ mod tests {
     #[test]
     fn test_priority_sorting() {
         let store = test_store();
-        insert_capture(&store, "c1", "could task", json!({"status":"inbox","horizon":"now","priority":"could"}));
-        insert_capture(&store, "c2", "must task", json!({"status":"inbox","horizon":"now","priority":"must"}));
-        insert_capture(&store, "c3", "should task", json!({"status":"inbox","horizon":"now","priority":"should"}));
+        insert_capture(
+            &store,
+            "c1",
+            "could task",
+            json!({"status":"inbox","horizon":"now","priority":"could"}),
+        );
+        insert_capture(
+            &store,
+            "c2",
+            "must task",
+            json!({"status":"inbox","horizon":"now","priority":"must"}),
+        );
+        insert_capture(
+            &store,
+            "c3",
+            "should task",
+            json!({"status":"inbox","horizon":"now","priority":"should"}),
+        );
 
         let active = queries::list_active_captures(&store).unwrap();
         let (mut now, _, _) = group_by_horizon(&active);
@@ -406,7 +446,10 @@ mod tests {
         // Unicode ellipsis (U+2026, 3 bytes) panicked in the old byte-index
         // truncation (`&title[..47]`) whenever byte 47 fell inside the char.
         // Build a title where bytes 46..49 are exactly the ellipsis.
-        let title = format!("{}\u{2026} and then some more trailing text", "x".repeat(46));
+        let title = format!(
+            "{}\u{2026} and then some more trailing text",
+            "x".repeat(46)
+        );
         assert!(!title.is_char_boundary(47), "fixture must straddle byte 47");
         let result = truncate_chars(&title, 50);
         assert!(result.ends_with("..."));

@@ -51,10 +51,7 @@ impl EmbeddingConfig {
     /// - `embedding.base_url`   (optional, defaults to localhost:11434)
     pub fn from_store_config(pairs: &[(String, String)]) -> Result<Self> {
         let get = |key: &str| -> Option<String> {
-            pairs
-                .iter()
-                .find(|(k, _)| k == key)
-                .map(|(_, v)| v.clone())
+            pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
         };
 
         let provider = get("embedding.provider")
@@ -243,7 +240,10 @@ mod tests {
     fn cosine_identical_vectors() {
         let v = vec![1.0, 2.0, 3.0];
         let sim = cosine_similarity(&v, &v);
-        assert!((sim - 1.0).abs() < 1e-6, "identical vectors should have similarity 1.0");
+        assert!(
+            (sim - 1.0).abs() < 1e-6,
+            "identical vectors should have similarity 1.0"
+        );
     }
 
     #[test]
@@ -251,7 +251,10 @@ mod tests {
         let a = vec![1.0, 0.0, 0.0];
         let b = vec![-1.0, 0.0, 0.0];
         let sim = cosine_similarity(&a, &b);
-        assert!((sim - (-1.0)).abs() < 1e-6, "opposite vectors should have similarity -1.0");
+        assert!(
+            (sim - (-1.0)).abs() < 1e-6,
+            "opposite vectors should have similarity -1.0"
+        );
     }
 
     #[test]
@@ -259,7 +262,10 @@ mod tests {
         let a = vec![1.0, 0.0];
         let b = vec![0.0, 1.0];
         let sim = cosine_similarity(&a, &b);
-        assert!(sim.abs() < 1e-6, "orthogonal vectors should have similarity ~0.0");
+        assert!(
+            sim.abs() < 1e-6,
+            "orthogonal vectors should have similarity ~0.0"
+        );
     }
 
     #[test]

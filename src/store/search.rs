@@ -109,7 +109,11 @@ pub(crate) fn sanitize_fts_query(raw: &str) -> String {
 }
 
 /// FTS5 search returning (item_id, title, bm25_rank) tuples, ordered by BM25.
-fn fts_search(conn: &Connection, query_text: &str, limit: usize) -> Result<Vec<(String, String, f64)>> {
+fn fts_search(
+    conn: &Connection,
+    query_text: &str,
+    limit: usize,
+) -> Result<Vec<(String, String, f64)>> {
     let safe_query = sanitize_fts_query(query_text);
     if safe_query.is_empty() {
         return Ok(Vec::new());
@@ -212,27 +216,27 @@ fn merge_rrf(
     // Vector contributions (already ordered by cosine similarity descending).
     for (rank_idx, (item_id, sim)) in vec_results.iter().enumerate() {
         let rank = rank_idx + 1; // 1-based
-        let entry = items
-            .entry(item_id.clone())
-            .or_insert_with(|| {
-                let title = item_title(conn, item_id).unwrap_or_default();
-                (title, None, None, 0.0)
-            });
+        let entry = items.entry(item_id.clone()).or_insert_with(|| {
+            let title = item_title(conn, item_id).unwrap_or_default();
+            (title, None, None, 0.0)
+        });
         entry.2 = Some(*sim);
         entry.3 += rrf_score(rank);
     }
 
     let mut results: Vec<HybridSearchResult> = items
         .into_iter()
-        .map(|(item_id, (title, fts_rank, vector_score, rrf_sum))| HybridSearchResult {
-            item_id,
-            title,
-            fts_rank,
-            vector_score,
-            combined_score: rrf_sum,
-            chunk_text: None,
-            chunk_id: None,
-        })
+        .map(
+            |(item_id, (title, fts_rank, vector_score, rrf_sum))| HybridSearchResult {
+                item_id,
+                title,
+                fts_rank,
+                vector_score,
+                combined_score: rrf_sum,
+                chunk_text: None,
+                chunk_id: None,
+            },
+        )
         .collect();
 
     results.sort_by(|a, b| {
@@ -676,8 +680,7 @@ mod tests {
 
         // Query vector close to the pizza chunk
         let query_vec = [0.85_f32, 0.15, 0.0];
-        let results =
-            multi_level_search(&conn, &query_vec, "pizza", 10).unwrap();
+        let results = multi_level_search(&conn, &query_vec, "pizza", 10).unwrap();
 
         // The item with the pizza chunk should appear
         assert!(!results.is_empty());
@@ -689,11 +692,7 @@ mod tests {
         let pizza = pizza_result.unwrap();
         assert!(pizza.chunk_text.is_some(), "Should have chunk snippet");
         assert!(
-            pizza
-                .chunk_text
-                .as_ref()
-                .unwrap()
-                .contains("pizza shop"),
+            pizza.chunk_text.as_ref().unwrap().contains("pizza shop"),
             "Chunk text should contain 'pizza shop'"
         );
     }
@@ -755,12 +754,18 @@ mod tests {
         insert_item(&conn, "noise1", "Unrelated Topic A", "");
         insert_embedding(&conn, "noise1", &[0.5, 0.5, 0.0]);
         insert_chunk_with_embedding(
-            &conn, "cn1a", "noise1", 0,
+            &conn,
+            "cn1a",
+            "noise1",
+            0,
             "something about building assistants tangentially",
             &[0.95, 0.05, 0.0],
         );
         insert_chunk_with_embedding(
-            &conn, "cn1b", "noise1", 1,
+            &conn,
+            "cn1b",
+            "noise1",
+            1,
             "more tangentially related content here",
             &[0.92, 0.08, 0.0],
         );
@@ -768,7 +773,10 @@ mod tests {
         insert_item(&conn, "noise2", "Unrelated Topic B", "");
         insert_embedding(&conn, "noise2", &[0.4, 0.6, 0.0]);
         insert_chunk_with_embedding(
-            &conn, "cn2a", "noise2", 0,
+            &conn,
+            "cn2a",
+            "noise2",
+            0,
             "yet another chunk close to the query vector",
             &[0.90, 0.10, 0.0],
         );
@@ -778,9 +786,13 @@ mod tests {
 
         assert!(!results.is_empty());
         assert_eq!(
-            results[0].item_id, "target",
+            results[0].item_id,
+            "target",
             "Exact title match must be top-1, got: {:?}",
-            results.iter().map(|r| (&r.item_id, r.combined_score)).collect::<Vec<_>>()
+            results
+                .iter()
+                .map(|r| (&r.item_id, r.combined_score))
+                .collect::<Vec<_>>()
         );
     }
 
@@ -791,7 +803,12 @@ mod tests {
         let conn = setup_db_with_chunks();
 
         // Relevant item, title clearly matches query
-        insert_item(&conn, "relevant", "85 Percent Unemployable AI Job Loss", "ai automation");
+        insert_item(
+            &conn,
+            "relevant",
+            "85 Percent Unemployable AI Job Loss",
+            "ai automation",
+        );
         insert_embedding(&conn, "relevant", &[0.8, 0.2, 0.0]);
 
         // Distractor with lots of chunks that are somewhat related
@@ -800,16 +817,18 @@ mod tests {
         for i in 0..5 {
             let cid = format!("dc{}", i);
             insert_chunk_with_embedding(
-                &conn, &cid, "distractor", i,
+                &conn,
+                &cid,
+                "distractor",
+                i,
                 "automation and job market discussion content filler text",
                 &[0.75, 0.25, 0.0],
             );
         }
 
         let query_vec = [0.8_f32, 0.2, 0.0];
-        let results = multi_level_search(
-            &conn, &query_vec, "unemployable AI job displacement", 10,
-        ).unwrap();
+        let results =
+            multi_level_search(&conn, &query_vec, "unemployable AI job displacement", 10).unwrap();
 
         assert!(!results.is_empty());
         // The relevant-title item must be in top 2 (not buried)
@@ -818,7 +837,10 @@ mod tests {
             relevant_pos.is_some() && relevant_pos.unwrap() < 2,
             "Relevant title item should be in top 2, pos={:?}, results: {:?}",
             relevant_pos,
-            results.iter().map(|r| (&r.item_id, r.combined_score)).collect::<Vec<_>>()
+            results
+                .iter()
+                .map(|r| (&r.item_id, r.combined_score))
+                .collect::<Vec<_>>()
         );
     }
 
@@ -854,10 +876,7 @@ mod tests {
 
     #[test]
     fn test_sanitize_fts_query_escapes_double_quotes() {
-        assert_eq!(
-            sanitize_fts_query("say \"hello\""),
-            "\"say \"\"hello\"\"\""
-        );
+        assert_eq!(sanitize_fts_query("say \"hello\""), "\"say \"\"hello\"\"\"");
     }
 
     #[test]

@@ -431,9 +431,22 @@ pub fn insert_evidence(
           video_timestamp, confidence, extractor, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
-            id, item_id, claim, quote, quote_sha256, status, resolution_json,
-            span_artifact, span_start, span_end, span_sha256, anchor_text,
-            video_timestamp, confidence, extractor, now,
+            id,
+            item_id,
+            claim,
+            quote,
+            quote_sha256,
+            status,
+            resolution_json,
+            span_artifact,
+            span_start,
+            span_end,
+            span_sha256,
+            anchor_text,
+            video_timestamp,
+            confidence,
+            extractor,
+            now,
         ],
     )?;
     Ok(changes > 0)
@@ -456,8 +469,11 @@ pub fn evidence_for_item(store: &Store, item_id: &str) -> Result<Vec<EvidenceRow
             status: row.get(5)?,
             confidence: row.get(6)?,
             extractor: row.get(7)?,
-            created_at: row.get::<_, String>(8)
-                .map(|s| DateTime::parse_from_rfc3339(&s).map(|dt| dt.with_timezone(&Utc)).unwrap_or_default())?,
+            created_at: row.get::<_, String>(8).map(|s| {
+                DateTime::parse_from_rfc3339(&s)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .unwrap_or_default()
+            })?,
         })
     })?;
 
@@ -738,9 +754,9 @@ pub fn resolve_capture_id(store: &Store, id_or_prefix: &str) -> Result<String> {
 
     // Try prefix match
     let pattern = format!("{}%", id_or_prefix);
-    let mut stmt = store.conn().prepare_cached(
-        "SELECT id FROM items WHERE id LIKE ?1 AND item_type = 'capture'",
-    )?;
+    let mut stmt = store
+        .conn()
+        .prepare_cached("SELECT id FROM items WHERE id LIKE ?1 AND item_type = 'capture'")?;
     let matches: Vec<String> = stmt
         .query_map([&pattern], |row| row.get(0))?
         .filter_map(|r| r.ok())
@@ -1245,14 +1261,42 @@ mod tests {
         upsert_item(&store, &SampleData::new().as_upsert()).unwrap();
 
         insert_evidence(
-            &store, "ev_001", "abc123def456", "claim", "quote", "sha", "resolved",
-            "{}", None, None, None, None, None, None, 0.9, "test",
+            &store,
+            "ev_001",
+            "abc123def456",
+            "claim",
+            "quote",
+            "sha",
+            "resolved",
+            "{}",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            0.9,
+            "test",
         )
         .unwrap();
 
         let dup = insert_evidence(
-            &store, "ev_001", "abc123def456", "claim", "quote", "sha", "resolved",
-            "{}", None, None, None, None, None, None, 0.9, "test",
+            &store,
+            "ev_001",
+            "abc123def456",
+            "claim",
+            "quote",
+            "sha",
+            "resolved",
+            "{}",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            0.9,
+            "test",
         )
         .unwrap();
         assert!(!dup); // duplicate ignored
@@ -1279,9 +1323,24 @@ mod tests {
     #[test]
     fn test_list_active_captures_excludes_done() {
         let store = test_store();
-        insert_capture(&store, "c1", "active todo", serde_json::json!({"status": "inbox"}));
-        insert_capture(&store, "c2", "done task", serde_json::json!({"status": "done"}));
-        insert_capture(&store, "c3", "triaged item", serde_json::json!({"status": "triaged"}));
+        insert_capture(
+            &store,
+            "c1",
+            "active todo",
+            serde_json::json!({"status": "inbox"}),
+        );
+        insert_capture(
+            &store,
+            "c2",
+            "done task",
+            serde_json::json!({"status": "done"}),
+        );
+        insert_capture(
+            &store,
+            "c3",
+            "triaged item",
+            serde_json::json!({"status": "triaged"}),
+        );
 
         let active = list_active_captures(&store).unwrap();
         assert_eq!(active.len(), 2);
@@ -1294,10 +1353,17 @@ mod tests {
     fn test_list_active_captures_excludes_snoozed_future() {
         let store = test_store();
         insert_capture(
-            &store, "c1", "snoozed item",
+            &store,
+            "c1",
+            "snoozed item",
             serde_json::json!({"status": "snoozed", "snoozed_until": "2099-01-01T00:00:00+00:00"}),
         );
-        insert_capture(&store, "c2", "active item", serde_json::json!({"status": "inbox"}));
+        insert_capture(
+            &store,
+            "c2",
+            "active item",
+            serde_json::json!({"status": "inbox"}),
+        );
 
         let active = list_active_captures(&store).unwrap();
         assert_eq!(active.len(), 1);
@@ -1308,7 +1374,9 @@ mod tests {
     fn test_list_active_captures_includes_expired_snooze() {
         let store = test_store();
         insert_capture(
-            &store, "c1", "expired snooze",
+            &store,
+            "c1",
+            "expired snooze",
             serde_json::json!({"status": "snoozed", "snoozed_until": "2020-01-01T00:00:00+00:00"}),
         );
 
@@ -1330,7 +1398,12 @@ mod tests {
     #[test]
     fn test_update_capture_status_to_done() {
         let store = test_store();
-        insert_capture(&store, "c1", "task to finish", serde_json::json!({"status": "inbox"}));
+        insert_capture(
+            &store,
+            "c1",
+            "task to finish",
+            serde_json::json!({"status": "inbox"}),
+        );
 
         let updated = update_capture_status(&store, "c1", "done", None).unwrap();
         assert!(updated);
@@ -1342,11 +1415,16 @@ mod tests {
     #[test]
     fn test_update_capture_status_to_snoozed() {
         let store = test_store();
-        insert_capture(&store, "c1", "snooze me", serde_json::json!({"status": "inbox"}));
+        insert_capture(
+            &store,
+            "c1",
+            "snooze me",
+            serde_json::json!({"status": "inbox"}),
+        );
 
-        let updated = update_capture_status(
-            &store, "c1", "snoozed", Some("2099-12-01T00:00:00+00:00"),
-        ).unwrap();
+        let updated =
+            update_capture_status(&store, "c1", "snoozed", Some("2099-12-01T00:00:00+00:00"))
+                .unwrap();
         assert!(updated);
 
         let item = get_item(&store, "c1").unwrap().unwrap();
@@ -1389,7 +1467,12 @@ mod tests {
     #[test]
     fn test_resolve_capture_exact_id() {
         let store = test_store();
-        insert_capture(&store, "abc12345def67890", "a task", serde_json::json!({"status": "inbox"}));
+        insert_capture(
+            &store,
+            "abc12345def67890",
+            "a task",
+            serde_json::json!({"status": "inbox"}),
+        );
 
         let resolved = resolve_capture_id(&store, "abc12345def67890").unwrap();
         assert_eq!(resolved, "abc12345def67890");
@@ -1398,8 +1481,18 @@ mod tests {
     #[test]
     fn test_resolve_capture_unique_prefix() {
         let store = test_store();
-        insert_capture(&store, "abc12345def67890", "task A", serde_json::json!({"status": "inbox"}));
-        insert_capture(&store, "xyz98765fed43210", "task B", serde_json::json!({"status": "inbox"}));
+        insert_capture(
+            &store,
+            "abc12345def67890",
+            "task A",
+            serde_json::json!({"status": "inbox"}),
+        );
+        insert_capture(
+            &store,
+            "xyz98765fed43210",
+            "task B",
+            serde_json::json!({"status": "inbox"}),
+        );
 
         let resolved = resolve_capture_id(&store, "abc123").unwrap();
         assert_eq!(resolved, "abc12345def67890");
@@ -1408,24 +1501,47 @@ mod tests {
     #[test]
     fn test_resolve_capture_ambiguous_prefix() {
         let store = test_store();
-        insert_capture(&store, "abc12345aaa00000", "task A", serde_json::json!({"status": "inbox"}));
-        insert_capture(&store, "abc12345bbb11111", "task B", serde_json::json!({"status": "inbox"}));
+        insert_capture(
+            &store,
+            "abc12345aaa00000",
+            "task A",
+            serde_json::json!({"status": "inbox"}),
+        );
+        insert_capture(
+            &store,
+            "abc12345bbb11111",
+            "task B",
+            serde_json::json!({"status": "inbox"}),
+        );
 
         let result = resolve_capture_id(&store, "abc123");
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("Ambiguous"), "Error should mention ambiguity: {}", err_msg);
+        assert!(
+            err_msg.contains("Ambiguous"),
+            "Error should mention ambiguity: {}",
+            err_msg
+        );
     }
 
     #[test]
     fn test_resolve_capture_nonexistent() {
         let store = test_store();
-        insert_capture(&store, "abc12345def67890", "a task", serde_json::json!({"status": "inbox"}));
+        insert_capture(
+            &store,
+            "abc12345def67890",
+            "a task",
+            serde_json::json!({"status": "inbox"}),
+        );
 
         let result = resolve_capture_id(&store, "zzz999");
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("No capture found"), "Error should say not found: {}", err_msg);
+        assert!(
+            err_msg.contains("No capture found"),
+            "Error should say not found: {}",
+            err_msg
+        );
     }
 
     #[test]
@@ -1433,15 +1549,21 @@ mod tests {
         let store = test_store();
         // Insert a content item (not capture) with matching prefix
         let tags: Vec<String> = vec![];
-        upsert_item(&store, &UpsertItem {
-            id: "abc12345content1",
-            item_type: "content",
-            title: "A Content Item",
-            source_url: Some("https://example.com"),
-            content_type: Some("web"),
-            tags: &tags, artifacts: &[], run_id: None,
-            metadata: &serde_json::json!({}),
-        }).unwrap();
+        upsert_item(
+            &store,
+            &UpsertItem {
+                id: "abc12345content1",
+                item_type: "content",
+                title: "A Content Item",
+                source_url: Some("https://example.com"),
+                content_type: Some("web"),
+                tags: &tags,
+                artifacts: &[],
+                run_id: None,
+                metadata: &serde_json::json!({}),
+            },
+        )
+        .unwrap();
 
         // Prefix "abc123" should NOT match the content item
         let result = resolve_capture_id(&store, "abc123");
