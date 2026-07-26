@@ -1,7 +1,7 @@
-# arkai CI: gates the voice-spine invariants on every push.
-# Inert until `main` is reconciled with origin and pushed (see
-# ~/AI/voice-memo-pipeline/docs/SPINE-STEELMAN-M3M4.md finding I9); until then the same
-# suite runs locally via the pre-commit hook installed from ops/ci/.
+# arkai CI: gates the voice-spine invariants on every push and pull request.
+# The same three gates run locally via the pre-commit hook in ops/ci/, so a
+# green commit locally should mean a green run here. The toolchain comes from
+# rust-toolchain.toml rather than from this file, so the two can never drift.
 name: ci
 
 on:
@@ -16,9 +16,12 @@ jobs:
     runs-on: macos-latest # flock/launchd-adjacent code paths target macOS; keep CI on the same OS
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+      # No toolchain version here on purpose. With no arguments this installs
+      # exactly what rust-toolchain.toml pins, components included, so the
+      # version is reviewed in one place instead of being whatever `stable`
+      # resolved to on the day the workflow ran.
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - name: Install ffmpeg (ffprobe is a hard runtime dep of the watcher tests)
         run: brew install ffmpeg
