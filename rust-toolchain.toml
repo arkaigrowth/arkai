@@ -1,0 +1,15 @@
+# Single source of truth for the toolchain, used by local builds and by CI.
+#
+# This exists because CI previously ran `dtolnay/rust-toolchain@stable` while a
+# contributor was on an older stable. Clippy gained lints in between, so
+# `cargo clippy -D warnings` passed locally and failed in CI on identical code.
+# Pinning makes the compiler a reviewed input rather than "whatever stable is
+# on the day the workflow ran".
+#
+# Bumping is deliberate: raise the version here, then run
+# `cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test` and fix
+# whatever the newer toolchain surfaces in the same commit. Do not bump this to
+# silence a failure without reading what the new lints are telling you.
+[toolchain]
+channel = "1.97.1"
+components = ["clippy", "rustfmt"]

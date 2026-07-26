@@ -1,8 +1,11 @@
 #!/bin/sh
 # arkai local CI gate: runs the invariant suite before every commit.
 # Installed by: ops/ci/install-hooks.sh (copies into .git/hooks/pre-commit).
-# This is the interim gate while origin/main is unreconciled (GH Actions inert);
-# see docs (voice-memo-pipeline) SPINE-STEELMAN-M3M4.md finding I9.
+#
+# This is a SUBSET of what .github/workflows/ci.yml enforces: it runs the tests
+# only, not `cargo fmt --check` or `cargo clippy --all-targets -- -D warnings`.
+# A commit that passes this hook can still fail CI on those two. Run all three
+# before pushing if you care about a green badge.
 set -e
 cd "$(git rev-parse --show-toplevel)"
 echo "[pre-commit] cargo test (voice-spine invariants)..."
