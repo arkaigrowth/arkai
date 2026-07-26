@@ -126,7 +126,7 @@ impl Catalog {
     /// Get all items sorted by processed_at (most recent first)
     pub fn list(&self, limit: Option<usize>) -> Vec<&CatalogItem> {
         let mut items: Vec<_> = self.items.iter().collect();
-        items.sort_by(|a, b| b.processed_at.cmp(&a.processed_at));
+        items.sort_by_key(|item| std::cmp::Reverse(item.processed_at));
 
         if let Some(limit) = limit {
             items.truncate(limit);

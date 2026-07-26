@@ -825,7 +825,7 @@ impl VoiceQueue {
             .collect();
 
         // Sort by detected_at (oldest first)
-        pending.sort_by(|a, b| a.data.detected_at.cmp(&b.data.detected_at));
+        pending.sort_by_key(|item| item.data.detected_at);
 
         Ok(pending)
     }
@@ -839,7 +839,7 @@ impl VoiceQueue {
             .collect();
 
         // Sort by detected_at (oldest first)
-        awaiting.sort_by(|a, b| a.data.detected_at.cmp(&b.data.detected_at));
+        awaiting.sort_by_key(|item| item.data.detected_at);
 
         Ok(awaiting)
     }
@@ -1115,7 +1115,7 @@ impl VoiceQueue {
 
         // Get recent items (last 5)
         let mut all_items: Vec<&QueueItem> = items.values().collect();
-        all_items.sort_by(|a, b| b.data.detected_at.cmp(&a.data.detected_at));
+        all_items.sort_by_key(|item| std::cmp::Reverse(item.data.detected_at));
         status.recent = all_items.into_iter().take(5).cloned().collect();
 
         Ok(status)
