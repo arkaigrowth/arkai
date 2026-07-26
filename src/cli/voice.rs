@@ -997,7 +997,7 @@ async fn execute_list(status_filter: Option<String>, limit: usize) -> Result<()>
         })
         .collect();
 
-    filtered.sort_by(|a, b| b.data.detected_at.cmp(&a.data.detected_at));
+    filtered.sort_by_key(|item| std::cmp::Reverse(item.data.detected_at));
 
     if filtered.is_empty() {
         println!("No items in queue");
